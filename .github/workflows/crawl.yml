@@ -17,6 +17,4 @@ jobs:
         env:
           SHEET_ID: ${{ secrets.SHEET_ID }}
           GCP_SA_JSON: ${{ secrets.GCP_SA_JSON }}
-          NAVER_ID: ${{ secrets.NAVER_ID }}
-          NAVER_SECRET: ${{ secrets.NAVER_SECRET }}
         run: python crawl.py
