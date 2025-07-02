@@ -12,9 +12,9 @@
 <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
 <script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
 <script>
-const SHEET_ID = '여기에_시트ID';
-const API_KEY  = '여기에_API_KEY';
-const RANGE    = 'Sheet1!A1:Z';
+const SHEET_ID = '1ReBV9KK0LEanYHguhVR8VT167wY1Gvwa8MDzIN2Lr-s';
+const API_KEY  = 'AIzaSyCRAB_XFBraWIUyHtxsjeqGaeTqruHY9XM';
+const RANGE    = 'Today!A1:Z';
 
 fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(RANGE)}?key=${API_KEY}`)
   .then(r=>r.json())
