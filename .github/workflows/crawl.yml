@@ -1,20 +1,21 @@
-name: Crawl price & update sheet
+name: Crawl Amazon best sellers & update sheet
 
 on:
   schedule:
-    - cron: '0 21 * * *'   # 21:00 UTC = 06:00 KST
+    - cron: '0 21 * * *'   # 매일 06:00 KST (UTC 21:00)
   workflow_dispatch:
 
 jobs:
-  build:
+  crawl:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: '3.12' }
+        with:
+          python-version: '3.12'
       - run: pip install -r requirements.txt
       - name: Run crawler
         env:
-          SHEET_ID: ${{ secrets.SHEET_ID }}
-          GCP_SA_JSON: ${{ secrets.GCP_SA_JSON }}
+          SHEET_ID:        ${{ secrets.SHEET_ID }}
+          GCP_SA_BASE64:   ${{ secrets.GCP_SA_BASE64 }}
         run: python crawl.py
