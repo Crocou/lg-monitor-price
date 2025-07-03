@@ -42,7 +42,7 @@ df_today["date"] = datetime.date.today().isoformat()
 # 2) Google Sheets 연결
 # ────────────────────────────────────────────────────────────────
 SCOPES   = ["https://www.googleapis.com/auth/spreadsheets"]
-SHEET_ID = os.environ["SHEET_ID"]
+SHEET_ID = os.environ["1ReBV9KK0LEanYHguhVR8VT167wY1Gvwa8MDzIN2Lr-s"]
 
 creds = Credentials.from_service_account_info(
             json.loads(os.environ["GCP_SA_JSON"]), scopes=SCOPES)
