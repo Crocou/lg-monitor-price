@@ -2,8 +2,8 @@ name: Crawl Amazon best sellers & update sheet
 
 on:
   schedule:
-    - cron: '0 21 * * *'   # 매일 06:00 KST (UTC 21:00)
-  workflow_dispatch:
+    - cron: '0 21 * * *'     # 매일 06:00 KST (UTC 21:00)
+  workflow_dispatch:         # 수동 실행도 가능
 
 jobs:
   crawl:
