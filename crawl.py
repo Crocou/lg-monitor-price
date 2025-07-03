@@ -20,6 +20,13 @@ HEADERS = {
 resp = requests.get(URL, headers=HEADERS, timeout=30)
 resp.raise_for_status()
 
+COOKIES = {
+    "lc-main": "de_DE",
+    "i18n-prefs": "EUR",
+}
+
+resp = requests.get(URL, headers=HEADERS, cookies=COOKIES, timeout=30)
+
 if "Enter the characters you see below" in resp.text:
     raise RuntimeError("Amazon CAPTCHA에 걸렸습니다. 잠시 후 재시도하세요.")
 
