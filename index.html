@@ -20,8 +20,8 @@
 <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
 <script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
 <script>
-const SHEET_ID = '⟨시트ID를_여기에⟩';   // ← 수정
-const API_KEY  = '⟨읽기전용_API_KEY⟩';  // ← 수정
+const SHEET_ID = '⟨1ReBV9KK0LEanYHguhVR8VT167wY1Gvwa8MDzIN2Lr-s⟩';   // ← 수정
+const API_KEY  = '⟨AIzaSyCRAB_XFBraWIUyHtxsjeqGaeTqruHY9XM⟩';  // ← 수정
 const RANGE    = 'Today!A1:Z';
 
 fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(RANGE)}?key=${API_KEY}`)
