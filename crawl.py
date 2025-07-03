@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Amazon.de ▸ Monitors 베스트셀러 → LG 제품만 필터
-→ Google Sheets ▸ Today, History 탭에 가격·변동 포함 기록
+Amazon.de ▸ Monitors 베스트셀러에서 LG 제품 추출 후
+Google Sheets ▸ Today, History 시트에 가격·변동률 포함 기록
 """
 
 import os, re, json, base64, datetime, requests, pandas as pd, gspread
 from bs4 import BeautifulSoup
 from google.oauth2.service_account import Credentials
+import pytz
 
-# ─────── 1. Amazon Bestsellers 스크래핑 ────────
+# ────────────────────────────────
+# 1. Amazon 베스트셀러 스크래핑
+# ────────────────────────────────
 URL = "https://www.amazon.de/gp/bestsellers/computers/429868031/"
 HEADERS = {
     "User-Agent": (
@@ -31,16 +34,19 @@ cards = soup.select("div.zg-grid-general-faceout") or \
 
 items = []
 for rank, card in enumerate(cards, start=1):
-    # 제목
-    title = (card.select_one("img") or {}).get("alt", "").strip()
-    # 링크
+    # 제목 추출
+    img_tag = card.select_one("img")
+    title = img_tag.get("alt", "").strip() if img_tag else (card.text or "").strip()
+
+    # 링크 추출
     link_tag = card.select_one("a.a-link-normal")
     if not link_tag:
         continue
     link = "https://www.amazon.de" + link_tag["href"].split("?", 1)[0]
-    asin = re.search(r"/dp/([A-Z0-9]{10})", link)
-    asin = asin.group(1) if asin else None
-    # 가격
+    asin_match = re.search(r"/dp/([A-Z0-9]{10})", link)
+    asin = asin_match.group(1) if asin_match else None
+
+    # 가격 추출
     price_tag = card.select_one(".p13n-sc-price")
     price_str = price_tag.text.strip().replace("€", "").replace(",", ".") if price_tag else ""
     try:
@@ -48,7 +54,9 @@ for rank, card in enumerate(cards, start=1):
     except:
         price = None
 
-    if "LG" in title.upper():
+    # LG 제품 필터 (브랜드명 + 모델 키워드 포함)
+    LG_KEYWORDS = ["LG", "ULTRAGEAR", "ULTRAFINE", "27GR", "32GN", "34WN", "29WP", "38WN"]
+    if any(k in title.upper() for k in LG_KEYWORDS):
         items.append({
             "asin": asin,
             "title": title,
@@ -58,20 +66,21 @@ for rank, card in enumerate(cards, start=1):
         })
 
 if not items:
-    raise RuntimeError("LG 모니터가 목록에 없습니다! HTML 구조 변경 가능성 ↑")
+    raise RuntimeError("LG 모니터가 목록에 없습니다! HTML 구조 변경 또는 필터 문제")
 
 df_today = pd.DataFrame(items).sort_values("rank").reset_index(drop=True)
 
-# 시간대 설정 (독일 기준)
-import pytz
-Seoul = pytz.timezone("Asia/Seoul")
+# 현재 시간 (독일 시간대)
+berlin = pytz.timezone("Europe/Berlin")
 now = datetime.datetime.now(berlin)
-df_today["date"] = now.strftime("%Y-%m-%d %H:%M")
+df_today["date"] = now.strftime("%Y-%m-%d %H:%M:%S")
 
 print(f"총 스크랩 상품 수   : {len(cards)}")
 print(f"LG 모니터 발견 수  : {len(df_today)}")
 
-# ─────── 2. Google Sheets 인증 ────────
+# ────────────────────────────────
+# 2. Google Sheets 연결
+# ────────────────────────────────
 SCOPES   = ["https://www.googleapis.com/auth/spreadsheets"]
 SHEET_ID = os.environ["SHEET_ID"]
 sa_json  = base64.b64decode(os.environ["GCP_SA_BASE64"]).decode("utf-8")
@@ -88,7 +97,9 @@ def ws(name, rows=1000, cols=20):
 ws_hist  = ws("History")
 ws_today = ws("Today")
 
-# ─────── 3. 변동률 계산 ────────
+# ────────────────────────────────
+# 3. 변동률 계산 (delta)
+# ────────────────────────────────
 try:
     prev = pd.DataFrame(ws_hist.get_all_records()).dropna()
 except:
@@ -106,7 +117,9 @@ if not prev.empty:
 else:
     df_today["delta"] = None
 
-# ─────── 4. 시트 업데이트 ────────
+# ────────────────────────────────
+# 4. Google Sheets 업데이트
+# ────────────────────────────────
 ws_hist.append_rows(df_today.values.tolist(), value_input_option="RAW")
 ws_today.clear()
 ws_today.update(
