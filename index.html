@@ -1,33 +1,44 @@
 <!doctype html><html lang="ko">
 <head>
   <meta charset="utf-8">
-  <title>LG 모니터 최저가</title>
-  <link rel="stylesheet" href="https://cdn.datatables.net/1.13.8/css/jquery.dataTables.min.css">
+  <title>LG 모니터 베스트셀러 순위</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="stylesheet"
+        href="https://cdn.datatables.net/1.13.8/css/jquery.dataTables.min.css">
+  <style>
+    body{font-family:sans-serif;max-width:960px;margin:20px auto;padding:0 10px}
+    h1{font-size:1.6rem;margin-bottom:1rem}
+  </style>
 </head>
 <body>
-  <h1>LG 모니터 최저가 순</h1>
-  <table id="tbl" class="display"></table>
-  <p><a id="dl" href="#" download>엑셀로 받기</a></p>
+  <h1>Amazon.de 모니터 베스트셀러 ― LG 제품 순위</h1>
+  <table id="tbl" class="display" style="width:100%"></table>
+  <p style="margin-top:1rem">
+    <a id="dl" href="#" download>📥 Excel로 다운로드</a>
+  </p>
 
 <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
 <script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
 <script>
-const SHEET_ID = '1ReBV9KK0LEanYHguhVR8VT167wY1Gvwa8MDzIN2Lr-s';
-const API_KEY  = 'AIzaSyCRAB_XFBraWIUyHtxsjeqGaeTqruHY9XM';
+const SHEET_ID = '⟨시트ID를_여기에⟩';   // ← 수정
+const API_KEY  = '⟨읽기전용_API_KEY⟩';  // ← 수정
 const RANGE    = 'Today!A1:Z';
 
 fetch(`https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(RANGE)}?key=${API_KEY}`)
-  .then(r=>r.json())
-  .then(({values})=>{
+  .then(r => r.json())
+  .then(({values}) => {
     const header = values.shift();
     $('#tbl').DataTable({
       data: values,
-      columns: header.map(h=>({title:h})),
-      order: [[1,'asc']]
+      columns: header.map(h => ({title: h})),
+      order: [[2,'asc']],   // rank (index 2) 기준 오름차순
+      pageLength: 25
     });
     // 엑셀 다운로드 링크
     document.getElementById('dl').href =
-      `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=xlsx`;
-  });
+      `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=xlsx&gid=`
+      + '0'; // 기본 첫 시트 GID 0
+  })
+  .catch(err => alert('시트 데이터를 불러오지 못했습니다. API Key·공개 설정 확인 필요\n' + err));
 </script>
 </body></html>
