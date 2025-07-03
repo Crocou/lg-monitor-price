@@ -23,6 +23,12 @@ HEADERS = {
 resp = requests.get(URL, headers=HEADERS, timeout=30)
 resp.raise_for_status()
 
+# ── DEBUG: 응답 HTML 앞 3 KB 덤프 ───────────────────────────
+dump_path = "/tmp/debug_dump.html"
+with open(dump_path, "w", encoding="utf-8") as f:
+    f.write(resp.text[:3000])
+print(f"📝 첫 3,000 byte를 {dump_path} 로 저장했습니다.")
+
 if "Enter the characters you see below" in resp.text:
     raise RuntimeError("Amazon CAPTCHA에 걸렸습니다. 잠시 후 다시 시도하세요.")
 
