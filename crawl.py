@@ -1,38 +1,87 @@
-# crawl.py (dynamic pagination + sheet retry)
+#!/usr/bin/env python3
+# crawl_selenium.py
 """
-Amazon.de ▸ Monitors 베스트셀러 1~100위+ (페이지 수 변동 대응)
-- 모든 페이지(pg=1,2,3 …) 자동 탐색 (컨테이너 없을 때까지)
-- LG 모니터 필터, 가격·순위·변동(△▽–) 계산
-- Google Sheet 업데이트: History 누적 / Today 최신, 3회 재시도(500 오류 대비)
+Amazon.de ▸ Monitors 베스트셀러 1~100위 (Selenium + Infinite Scroll)
+- 1페이지(1~50위)는 스크롤로 50개 모두 로딩된 뒤에야 2페이지(51~100위)로 이동
+- LG 모니터만 필터링, 가격·순위·변동 계산
+- Google Sheet: History 누적 / Today 최신, 3회 재시도
 """
 
-import os, re, json, base64, datetime, time, requests, pandas as pd, gspread, pytz
+import os, re, json, base64, datetime, time, pandas as pd, gspread, pytz
 from bs4 import BeautifulSoup
 from google.oauth2.service_account import Credentials
 
-BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031"  # pg=N
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
-    "Accept-Language": "de-DE,de;q=0.9,en;q=0.7",
-}
-COOKIES = {"lc-main": "de_DE", "i18n-prefs": "EUR"}
+# ───── Selenium ─────
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
 
-# ───── 1) 페이지 크롤링 (무한 루프, 빈 페이지 만나면 종료) ─────
-all_cards = []
-for pg in range(1, 10):       # Amazon 보통 1~2 페이지, 안전하게 9까지 탐색
-    url = BASE_URL if pg == 1 else f"{BASE_URL}?pg={pg}"
-    html = requests.get(url, headers=HEADERS, cookies=COOKIES, timeout=30).text
-    soup = BeautifulSoup(html, "lxml")
-    cards = soup.select("div.zg-grid-general-faceout") or soup.select("div.p13n-sc-uncoverable-faceout")
-    if not cards:
-        break  # 더 이상 페이지 없음
-    all_cards.extend([(c, pg) for c in cards])
-    if len(cards) < 50:
-        break  # 마지막 페이지(보통 30개) 발견
-print(f"[INFO] total containers: {len(all_cards)} on {pg} page(s)")
+BASE_URL      = "https://www.amazon.de/gp/bestsellers/computers/429868031"
+SCROLL_PAUSE  = 1.2          # 스크롤 후 대기 시간(초)
+MAX_SCROLLS   = 25           # 페이지당 최대 스크롤 횟수
+EXPECTED_PER_PAGE = 50       # 1페이지에서 기대하는 카드 수
 
-# ───── 2) Helper 함수 ─────
+# ────────────────────────────────────────────────────────────────────────────────
+# 1) Selenium 설정 및 스크롤 로더
+# ────────────────────────────────────────────────────────────────────────────────
+def init_driver() -> webdriver.Chrome:
+    """헤드리스 Chrome WebDriver 객체 반환"""
+    opts = Options()
+    opts.add_argument("--headless=new")  # Chrome 115+ 전용
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--window-size=1920,1080")
+    opts.add_argument("--lang=de")       # 독일어 고정
+    return webdriver.Chrome(options=opts)
 
+def load_cards_with_scroll(driver: webdriver.Chrome,
+                           expected: int = EXPECTED_PER_PAGE,
+                           max_scrolls: int = MAX_SCROLLS) -> None:
+    """
+    현재 페이지에서 expected개 카드가 보일 때까지 아래로 스크롤한다.
+    결과는 driver.page_source로 확인.
+    """
+    last_height = driver.execute_script("return document.body.scrollHeight")
+    for _ in range(max_scrolls):
+        cards = driver.find_elements(
+            By.CSS_SELECTOR,
+            "div.zg-grid-general-faceout, div.p13n-sc-uncoverable-faceout",
+        )
+        if len(cards) >= expected:
+            break  # 충분히 로드됨
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        time.sleep(SCROLL_PAUSE)
+        new_height = driver.execute_script("return document.body.scrollHeight")
+        if new_height == last_height:    # 더 이상 로드 불가
+            break
+        last_height = new_height
+
+def scrape_all_pages() -> list[tuple[BeautifulSoup, int]]:
+    """
+    Selenium으로 1·2 페이지 스크랩 후 각 카드(bs4 element)와 페이지 번호 반환.
+    1페이지 카드가 50개 미만이면 예외를 발생시켜 2페이지 진행을 막는다.
+    """
+    driver = init_driver()
+    all_cards: list[tuple[BeautifulSoup, int]] = []
+    try:
+        for pg in (1, 2):
+            url = BASE_URL if pg == 1 else f"{BASE_URL}?pg={pg}"
+            driver.get(url)
+            load_cards_with_scroll(driver, expected=EXPECTED_PER_PAGE if pg == 1 else 1)
+            soup = BeautifulSoup(driver.page_source, "lxml")
+            cards = soup.select("div.zg-grid-general-faceout") \
+                 or soup.select("div.p13n-sc-uncoverable-faceout")
+            if pg == 1 and len(cards) < EXPECTED_PER_PAGE:
+                raise RuntimeError("1페이지에서 50개 모두 로드되지 않았습니다. 레이아웃 변동 여부 확인 요망.")
+            for c in cards:
+                all_cards.append((c, pg))
+    finally:
+        driver.quit()
+    return all_cards
+
+# ────────────────────────────────────────────────────────────────────────────────
+# 2) BeautifulSoup 헬퍼 (기존 로직 유지)
+# ────────────────────────────────────────────────────────────────────────────────
 def pick_title(card):
     for sel in [
         'span[class*="p13n-sc-css-line-clamp"]', '[title]',
@@ -48,7 +97,8 @@ def pick_price(card):
         p = card.select_one(sel)
         if p and p.get_text(strip=True):
             return p.get_text(strip=True)
-    whole = card.select_one('span.a-price-whole'); frac = card.select_one('span.a-price-fraction')
+    whole = card.select_one('span.a-price-whole')
+    frac  = card.select_one('span.a-price-fraction')
     if whole:
         txt = whole.get_text(strip=True).replace('.', '').replace(',', '.')
         if frac: txt += frac.get_text(strip=True)
@@ -62,72 +112,102 @@ def money_to_float(txt):
     except ValueError:
         return None
 
-# ───── 3) 카드 → 리스트 ─────
-items = []
-for idx, (card, pg) in enumerate(all_cards, start=1):
-    rank_text = card.select_one('.zg-badge-text')
-    rank_on_pg = int(rank_text.get_text(strip=True).lstrip('#')) if rank_text else ((idx - 1) % 50 + 1)
-    abs_rank = (pg - 1) * 50 + rank_on_pg
+# ────────────────────────────────────────────────────────────────────────────────
+# 3) 데이터 수집 & 가공
+# ────────────────────────────────────────────────────────────────────────────────
+def collect_items() -> pd.DataFrame:
+    all_cards = scrape_all_pages()
+    page_count = max((p for _, p in all_cards), default=0)
+    print(f"[INFO] containers: {len(all_cards)} (pages: {page_count})")
 
-    a = card.select_one("a.a-link-normal[href*='/dp/']")
-    if not a:
-        continue
-    title = pick_title(card) or a.get_text(" ", strip=True)
-    if 'LG' not in title.upper():
-        continue
-    link = "https://www.amazon.de" + a['href'].split('?', 1)[0]
-    asin_m = re.search(r"/dp/([A-Z0-9]{10})", link)
-    asin = asin_m.group(1) if asin_m else None
-    price_val = money_to_float(pick_price(card))
-    items.append({"asin": asin, "title": title, "rank": abs_rank, "price": price_val, "url": link})
+    items = []
+    for idx, (card, pg) in enumerate(all_cards, start=1):
+        rank_text = card.select_one('.zg-badge-text')
+        rank_on_pg = int(rank_text.get_text(strip=True).lstrip('#')) \
+                     if rank_text else ((idx - 1) % 50 + 1)
+        abs_rank = (pg - 1) * 50 + rank_on_pg
 
-if not items:
-    raise RuntimeError("LG 모니터를 찾을 수 없습니다.")
+        a = card.select_one("a.a-link-normal[href*='/dp/']")
+        if not a:
+            continue
+        title = pick_title(card) or a.get_text(" ", strip=True)
+        if 'LG' not in title.upper():       # LG 모니터 필터
+            continue
+        link = "https://www.amazon.de" + a['href'].split('?', 1)[0]
+        asin = re.search(r"/dp/([A-Z0-9]{10})", link).group(1)
+        price_val = money_to_float(pick_price(card))
+        items.append(dict(
+            asin=asin, title=title, rank=abs_rank,
+            price=price_val, url=link
+        ))
 
-items.sort(key=lambda x: x['rank'])
-df_today = pd.DataFrame(items)
+    if not items:
+        raise RuntimeError("LG 모니터를 찾을 수 없습니다.")
 
-kst = pytz.timezone('Asia/Seoul'); df_today['date'] = datetime.datetime.now(kst).strftime('%Y-%m-%d %H:%M:%S')
+    items.sort(key=lambda x: x['rank'])
+    df = pd.DataFrame(items)
+    return df
 
-# ───── 4) Sheets 연결 ─────
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-sa_json = json.loads(base64.b64decode(os.environ['GCP_SA_BASE64']).decode())
-creds = Credentials.from_service_account_info(sa_json, scopes=SCOPES)
-sh = gspread.authorize(creds).open_by_key(os.environ['SHEET_ID'])
-ws_hist = sh.worksheet('History') if 'History' in [w.title for w in sh.worksheets()] else sh.add_worksheet('History', 2000, 20)
-ws_today = sh.worksheet('Today')  if 'Today'  in [w.title for w in sh.worksheets()] else sh.add_worksheet('Today',  100, 20)
+# ────────────────────────────────────────────────────────────────────────────────
+# 4) Google Sheet 갱신 (기존 로직 그대로)
+# ────────────────────────────────────────────────────────────────────────────────
+def update_sheets(df_today: pd.DataFrame):
+    kst = pytz.timezone('Asia/Seoul')
+    df_today['date'] = datetime.datetime.now(kst).strftime('%Y-%m-%d %H:%M:%S')
 
-# ───── 5) 변동 계산 ─────
-try:
-    prev = pd.DataFrame(ws_hist.get_all_records())
-except: prev = pd.DataFrame()
-if not prev.empty and {'asin','rank','price','date'}.issubset(prev.columns):
-    latest = (prev.sort_values('date').groupby('asin').last().reset_index()[['asin','rank','price']]
-              .rename(columns={'rank':'rank_prev','price':'price_prev'}))
-    df_today = df_today.merge(latest, on='asin', how='left')
-    df_today['rank_delta_num'] = df_today['rank_prev'] - df_today['rank']
-    df_today['price_delta_num'] = df_today['price'] - df_today['price_prev']
-else:
-    df_today['rank_delta_num'] = None; df_today['price_delta_num'] = None
+    SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+    creds = Credentials.from_service_account_info(
+        json.loads(base64.b64decode(os.environ['GCP_SA_BASE64']).decode()),
+        scopes=SCOPES,
+    )
+    sh = gspread.authorize(creds).open_by_key(os.environ['SHEET_ID'])
+    ws_hist = sh.worksheet('History') if 'History' in [w.title for w in sh.worksheets()] \
+              else sh.add_worksheet('History', 2000, 20)
+    ws_today = sh.worksheet('Today')  if 'Today'  in [w.title for w in sh.worksheets()] \
+              else sh.add_worksheet('Today',  100, 20)
 
-fmt = lambda v,p=False: '-' if (pd.isna(v) or v==0) else ('△' if v>0 else '▽') + (f"{abs(v):.2f}" if p else str(abs(int(v))))
-df_today['rank_delta']  = df_today['rank_delta_num'].apply(fmt)
-df_today['price_delta'] = df_today['price_delta_num'].apply(lambda x: fmt(x, True))
-
-cols = ['asin','title','rank','price','url','date','rank_delta','price_delta']
-df_today = df_today[cols].fillna("")
-
-# ───── 6) 시트 업데이트 (재시도) ─────
-for attempt in range(3):
     try:
-        if not ws_hist.get_all_values():
-            ws_hist.append_row(cols, value_input_option='RAW')
-        ws_hist.append_rows(df_today.values.tolist(), value_input_option='RAW')
-        ws_today.clear(); ws_today.update([cols] + df_today.values.tolist(), value_input_option='RAW')
-        break
-    except gspread.exceptions.APIError as e:
-        if attempt == 2: raise
-        print('[WARN] Sheets API error, retrying...', e)
-        time.sleep(2)
+        prev = pd.DataFrame(ws_hist.get_all_records())
+    except Exception:
+        prev = pd.DataFrame()
 
-print('✓ 완료, LG 모니터', len(df_today))
+    if not prev.empty and {'asin','rank','price','date'}.issubset(prev.columns):
+        latest = (prev.sort_values('date')
+                       .groupby('asin').last().reset_index()[['asin','rank','price']]
+                       .rename(columns={'rank':'rank_prev','price':'price_prev'}))
+        df_today = df_today.merge(latest, on='asin', how='left')
+        df_today['rank_delta_num']  = df_today['rank_prev']  - df_today['rank']
+        df_today['price_delta_num'] = df_today['price']      - df_today['price_prev']
+    else:
+        df_today[['rank_delta_num', 'price_delta_num']] = None
+
+    fmt = lambda v,p=False: '-' if (pd.isna(v) or v==0) \
+          else ('△' if v>0 else '▽') + (f"{abs(v):.2f}" if p else str(abs(int(v))))
+    df_today['rank_delta']  = df_today['rank_delta_num'].apply(fmt)
+    df_today['price_delta'] = df_today['price_delta_num'].apply(lambda x: fmt(x, True))
+
+    cols = ['asin','title','rank','price','url','date','rank_delta','price_delta']
+    df_today = df_today[cols].fillna("")
+
+    for attempt in range(3):
+        try:
+            if not ws_hist.get_all_values():
+                ws_hist.append_row(cols, value_input_option='RAW')
+            ws_hist.append_rows(df_today.values.tolist(), value_input_option='RAW')
+            ws_today.clear()
+            ws_today.update([cols] + df_today.values.tolist(), value_input_option='RAW')
+            break
+        except gspread.exceptions.APIError as e:
+            if attempt == 2:
+                raise
+            print('[WARN] Sheets API error, retrying...', e)
+            time.sleep(2)
+
+    print('✓ 완료, LG 모니터', len(df_today))
+
+# ────────────────────────────────────────────────────────────────────────────────
+# 5) Main
+# ────────────────────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    df_today = collect_items()
+    update_sheets(df_today)
