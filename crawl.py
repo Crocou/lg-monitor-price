@@ -32,9 +32,6 @@ for pg in range(1, 10):                               # 안전하게 9페이지�
     )
     if not cards:
         break
-    all_cards.extend([(c, pg) for c in cards])
-    if len(cards) < 50:           # 마지막 페이지(보통 30개)면 종료
-        break
 
 print(f"[INFO] total containers: {len(all_cards)} on {pg} page(s)")
 
