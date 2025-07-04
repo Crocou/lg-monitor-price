@@ -1,46 +1,93 @@
-# crawl.py (robust pagination + accurate rank + price)
+# crawl.py  ──────────────────────────────────────────────────────────────
 """
-Amazon.de 베스트셀러 ▸ Monitors 1~100위 (두 페이지)
+Amazon.de 베스트셀러 ▸ Monitors 1~100위 (두 페이지, 스크롤 로딩 지원)
 - LG 모니터만 수집
-- 정확한 절대 순위 (Amazon 각 페이지 1‥50 + (page-1)*50)
-- 가격 (`span.a-offscreen` 등 포괄)
-- △ ▽ – 변동(순위·가격)
+- Playwright로 스크롤 → JS 렌더링 완료 후 DOM 스냅샷
+- 1페이지(1‥50위)를 완전히 수집해야 2페이지로 이동
+- 가격(`span.a-offscreen` 등), 순위/가격 Δ 계산
 - Google Sheet(History, Today) 기록
 """
 
-import os, re, json, base64, datetime, requests, pandas as pd, gspread, pytz
+import os, re, json, base64, datetime, pytz, pandas as pd
 from bs4 import BeautifulSoup
 from google.oauth2.service_account import Credentials
+from playwright.sync_api import sync_playwright, TimeoutError as PwTimeout
 
+# ─────────────────────────────
+# 0. 상수
+# ─────────────────────────────
 BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031"  # ?pg=1|2
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/126.0 Safari/537.36"
+    ),
     "Accept-Language": "de-DE,de;q=0.9,en;q=0.7",
 }
 COOKIES = {"lc-main": "de_DE", "i18n-prefs": "EUR"}
 
-# ─────────────────────────────
-# 1. Fetch helper (returns (card_soup, page_rank))
-# ─────────────────────────────
+SCROLL_PAUSE_MS = 800     # 스크롤 후 대기시간 (ms)
+MAX_SCROLL_ITER = 20      # 안전장치: 스크롤 최대 시도 횟수
 
-def fetch_cards(page: int):
-    url = BASE_URL if page == 1 else f"{BASE_URL}?pg={page}&ref_=zg_bs_pg_{page}"
-    html = requests.get(url, headers=HEADERS, cookies=COOKIES, timeout=30).text
-    if "Enter the characters you see below" in html:
-        raise RuntimeError("Amazon CAPTCHA!")
+# ─────────────────────────────
+# 1. Fetch helper (Playwright, 50개 확보 보장)
+# ─────────────────────────────
+def fetch_cards(page_number: int):
+    """해당 베스트셀러 페이지(1 or 2)에서 50개 카드 BeautifulSoup 객체 반환 리스트."""
+    target_url = (
+        BASE_URL if page_number == 1
+        else f"{BASE_URL}?pg={page_number}&ref_=zg_bs_pg_{page_number}"
+    )
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            locale="de-DE",
+            user_agent=HEADERS["User-Agent"],
+            extra_http_headers=HEADERS,
+        )
+        page = context.new_page()
+
+        try:
+            page.goto(target_url, timeout=60_000)  # networkidle 대기
+        except PwTimeout:
+            browser.close()
+            raise RuntimeError(f"Amazon 페이지 로드 타임아웃: {target_url}")
+
+        # 무한 스크롤 시뮬레이션 → 최소 50 카드 확보 또는 MAX_SCROLL_ITER 도달
+        for _ in range(MAX_SCROLL_ITER):
+            cards_cnt = page.eval_on_selector_all(
+                "div.zg-grid-general-faceout, div.p13n-sc-uncoverable-faceout",
+                "els => els.length",
+            )
+            if cards_cnt >= 50:
+                break
+            page.mouse.wheel(0, 10_000)            # 맨 아래로 휠
+            page.wait_for_timeout(SCROLL_PAUSE_MS)
+        else:
+            browser.close()
+            raise RuntimeError(
+                f"스크롤 한계({MAX_SCROLL_ITER}) 도달 – "
+                f"{page_number}페이지 카드 {cards_cnt}개"
+            )
+
+        html = page.content()
+        browser.close()
+
     soup = BeautifulSoup(html, "lxml")
-    containers = soup.select("div.zg-grid-general-faceout") or soup.select("div.p13n-sc-uncoverable-faceout")
-    return containers
+    containers = soup.select("div.zg-grid-general-faceout") or \
+                 soup.select("div.p13n-sc-uncoverable-faceout")
 
-all_cards = []
-for pg in (1, 2):
-    all_cards.extend([(c, pg) for c in fetch_cards(pg)])
-print(f"[INFO] total card containers: {len(all_cards)}")
+    if len(containers) < 50:
+        raise RuntimeError(
+            f"{page_number}페이지 카드 수집 실패: {len(containers)} / 50"
+        )
+    return containers
 
 # ─────────────────────────────
 # 2. Parsing helpers
 # ─────────────────────────────
-
 def pick_title(card):
     selectors = [
         'span[class*="p13n-sc-css-line-clamp"]', '[title]',
@@ -54,14 +101,14 @@ def pick_title(card):
     return img.get("alt", "").strip() if img else ""
 
 def pick_price(card):
-    # Most reliable: span.a-offscreen
     p = card.select_one('span.a-offscreen')
     if p and p.get_text(strip=True):
         return p.get_text(strip=True)
     p = card.select_one('span.p13n-sc-price')
     if p and p.get_text(strip=True):
         return p.get_text(strip=True)
-    whole = card.select_one('span.a-price-whole'); frac = card.select_one('span.a-price-fraction')
+    whole = card.select_one('span.a-price-whole')
+    frac = card.select_one('span.a-price-fraction')
     if whole:
         txt = whole.get_text(strip=True).replace('.', '').replace(',', '.')
         if frac:
@@ -77,14 +124,21 @@ def money_to_float(txt):
         return None
 
 # ─────────────────────────────
-# 3. Build item list with absolute ranks
+# 3. 카드 수집 (절대 순위 계산 포함)
 # ─────────────────────────────
+all_cards = []
+for pg in (1, 2):
+    print(f"[INFO] 페이지 {pg} 수집 시작…")
+    containers = fetch_cards(pg)
+    all_cards.extend([(c, pg) for c in containers])
+print(f"[INFO] 총 카드 수집 완료: {len(all_cards)}개")
+
 items = []
-for idx, (card, page) in enumerate(all_cards, start=1):
-    # rank text on page (1..50)
+for idx, (card, page_num) in enumerate(all_cards, start=1):
     rank_tag = card.select_one('.zg-badge-text')
-    rank_on_page = int(rank_tag.get_text(strip=True).lstrip('#')) if rank_tag else ((idx - 1) % 50 + 1)
-    abs_rank = (page - 1) * 50 + rank_on_page
+    rank_on_page = int(rank_tag.get_text(strip=True).lstrip('#')) \
+        if rank_tag else ((idx - 1) % 50 + 1)
+    abs_rank = (page_num - 1) * 50 + rank_on_page
 
     a = card.select_one("a.a-link-normal[href*='/dp/']")
     if not a:
@@ -93,9 +147,9 @@ for idx, (card, page) in enumerate(all_cards, start=1):
     if not re.search(r"\bLG\b", title, re.I):
         continue
 
-    link = "https://www.amazon.de" + a['href'].split('?', 1)[0]
-    asin = re.search(r"/dp/([A-Z0-9]{10})", link)
-    asin = asin.group(1) if asin else None
+    link = "https://www.amazon.de" + a["href"].split("?", 1)[0]
+    asin_match = re.search(r"/dp/([A-Z0-9]{10})", link)
+    asin = asin_match.group(1) if asin_match else None
     price_val = money_to_float(pick_price(card))
 
     items.append({
@@ -103,28 +157,27 @@ for idx, (card, page) in enumerate(all_cards, start=1):
         "title": title,
         "rank": abs_rank,
         "price": price_val,
-        "url": link
+        "url": link,
     })
 
-print(f"[INFO] LG items: {len(items)}")
 if not items:
     raise RuntimeError("LG 모니터를 찾지 못했습니다.")
 
-# Sort by absolute rank
-items.sort(key=lambda x: x['rank'])
+items.sort(key=lambda x: x["rank"])
 df_today = pd.DataFrame(items)
 
-# Timestamp (KST)
-kst = pytz.timezone('Asia/Seoul')
-df_today['date'] = datetime.datetime.now(kst).strftime('%Y-%m-%d %H:%M:%S')
+# ─────────────────────────────
+# 4. 타임스탬프 (KST) 및 Δ 계산
+# ─────────────────────────────
+kst = pytz.timezone("Asia/Seoul")
+df_today["date"] = datetime.datetime.now(kst).strftime("%Y-%m-%d %H:%M:%S")
 
-# ─────────────────────────────
-# 4. Google Sheets
-# ─────────────────────────────
+# Google Sheets 설정
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-SHEET_ID = os.environ['SHEET_ID']
-sa_json = json.loads(base64.b64decode(os.environ['GCP_SA_BASE64']).decode())
+SHEET_ID = os.environ["SHEET_ID"]
+sa_json = json.loads(base64.b64decode(os.environ["GCP_SA_BASE64"]).decode())
 creds = Credentials.from_service_account_info(sa_json, scopes=SCOPES)
+import gspread  # 지연 import (Playwright 충돌 방지)
 sh = gspread.authorize(creds).open_by_key(SHEET_ID)
 
 def ensure_ws(name, rows=2000, cols=20):
@@ -133,47 +186,48 @@ def ensure_ws(name, rows=2000, cols=20):
     except gspread.WorksheetNotFound:
         return sh.add_worksheet(name, rows, cols)
 
-ws_hist = ensure_ws('History')
-ws_today = ensure_ws('Today', 100, 20)
+ws_hist = ensure_ws("History")
+ws_today = ensure_ws("Today", 100, 20)
 
-# ─────────────────────────────
-# 5. Δ 계산
-# ─────────────────────────────
+# Δ 계산
 try:
     prev = pd.DataFrame(ws_hist.get_all_records())
-except:
+except Exception:
     prev = pd.DataFrame()
 
-if not prev.empty and set(['asin', 'rank', 'price', 'date']).issubset(prev.columns):
-    latest = (prev.sort_values('date')
-              .groupby('asin', as_index=False)
-              .last()[['asin', 'rank', 'price']]
-              .rename(columns={'rank': 'rank_prev', 'price': 'price_prev'}))
-    df_today = df_today.merge(latest, on='asin', how='left')
-    df_today['rank_delta_num'] = df_today['rank_prev'] - df_today['rank']
-    df_today['price_delta_num'] = df_today['price'] - df_today['price_prev']
+if (not prev.empty) and set(["asin", "rank", "price", "date"]).issubset(prev.columns):
+    latest = (
+        prev.sort_values("date")
+        .groupby("asin", as_index=False)
+        .last()[["asin", "rank", "price"]]
+        .rename(columns={"rank": "rank_prev", "price": "price_prev"})
+    )
+    df_today = df_today.merge(latest, on="asin", how="left")
+    df_today["rank_delta_num"] = df_today["rank_prev"] - df_today["rank"]
+    df_today["price_delta_num"] = df_today["price"] - df_today["price_prev"]
 else:
-    df_today['rank_delta_num'] = None
-    df_today['price_delta_num'] = None
+    df_today["rank_delta_num"] = None
+    df_today["price_delta_num"] = None
 
-fmt = lambda v, p=False: '-' if (pd.isna(v) or v == 0) else (('△' if v > 0 else '▽') + (f"{abs(v):.2f}" if p else str(abs(int(v)))))
+fmt = lambda v, p=False: "-" if (pd.isna(v) or v == 0) else (
+    ("△" if v > 0 else "▽") + (f"{abs(v):.2f}" if p else str(abs(int(v))))
+)
+df_today["rank_delta"] = df_today["rank_delta_num"].apply(fmt)
+df_today["price_delta"] = df_today["price_delta_num"].apply(lambda x: fmt(x, True))
 
-df_today['rank_delta'] = df_today['rank_delta_num'].apply(fmt)
-df_today['price_delta'] = df_today['price_delta_num'].apply(lambda x: fmt(x, True))
-
-cols = ['asin', 'title', 'rank', 'price', 'url', 'date', 'rank_delta', 'price_delta']
-df_today = df_today[cols]
-
-# Replace NaN → "" for JSON
-df_today = df_today.fillna("")
+cols = [
+    "asin", "title", "rank", "price", "url",
+    "date", "rank_delta", "price_delta"
+]
+df_today = df_today[cols].fillna("")
 
 # ─────────────────────────────
-# 6. Sheet update
+# 5. Sheet 업데이트
 # ─────────────────────────────
 if not ws_hist.get_all_values():
-    ws_hist.append_row(cols, value_input_option='RAW')
-ws_hist.append_rows(df_today.values.tolist(), value_input_option='RAW')
+    ws_hist.append_row(cols, value_input_option="RAW")
+ws_hist.append_rows(df_today.values.tolist(), value_input_option="RAW")
 ws_today.clear()
-ws_today.update([cols] + df_today.values.tolist(), value_input_option='RAW')
+ws_today.update([cols] + df_today.values.tolist(), value_input_option="RAW")
 
-print('✓ 업데이트 완료: LG 모니터', len(df_today))
+print(f"✓ 업데이트 완료: LG 모니터 {len(df_today)}개")
