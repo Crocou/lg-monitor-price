@@ -123,6 +123,7 @@ df_today['price_delta']=df_today['price_delta_num'].apply(lambda x:fmt(x,True))
 
 cols=['asin','title','rank','price','url','date','rank_delta','price_delta']
 df_today=df_today[cols]
+df_today = df_today.fillna("")
 
 # History header
 if not ws_hist.get_all_values():
