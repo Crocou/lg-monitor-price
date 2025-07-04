@@ -10,7 +10,7 @@ import os, re, json, base64, datetime, time, requests, pandas as pd, gspread, py
 from bs4 import BeautifulSoup
 from google.oauth2.service_account import Credentials
 
-BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031"  # pg=N
+BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031/"  # pg=N
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
     "Accept-Language": "de-DE,de;q=0.9,en;q=0.7",
