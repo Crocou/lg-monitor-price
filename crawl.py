@@ -59,7 +59,6 @@ def fetch_cards(page_number: int):
         for _ in range(MAX_SCROLL_ITER):
             cards_cnt = page.eval_on_selector_all(
                 "div.zg-grid-general-faceout, div.p13n-sc-uncoverable-faceout",
-                "els => els.length",
             )
             if cards_cnt >= 50:
                 break
@@ -68,8 +67,8 @@ def fetch_cards(page_number: int):
         else:
             browser.close()
             raise RuntimeError(
-                f"스크롤 한계({MAX_SCROLL_ITER}) 도달 – "
-                f"{page_number}페이지 카드 {cards_cnt}개"
+            raise RuntimeError(
+                f"스크롤 한계({MAX_SCROLL_ITER})에 도달 – 카드 {len(cards)}개만 확인"
             )
 
         html = page.content()
@@ -80,9 +79,8 @@ def fetch_cards(page_number: int):
                  soup.select("div.p13n-sc-uncoverable-faceout")
 
     if len(containers) < 50:
-        raise RuntimeError(
-            f"{page_number}페이지 카드 수집 실패: {len(containers)} / 50"
-        )
+        raise RuntimeError(f"카드 수집 실패: {page_number}페이지 {len(containers)}개")
+
     return containers
 
 # ─────────────────────────────
