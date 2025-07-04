@@ -34,72 +34,118 @@ MAX_SCROLL_ITER = 20      # 안전장치: 스크롤 최대 시도 횟수
 # 1. Fetch helper (Playwright, 컨테이너 스크롤 완전판)
 # ─────────────────────────────
 from playwright.sync_api import sync_playwright, TimeoutError as PwTimeout
+import random, time
 
-MIN_CARDS       = 50
-SCROLL_PAUSE    = 500          # ms
-MAX_SCROLLS     = 120          # 안전장치
+MIN_CARDS    = 50
+SCROLL_WAIT  = 400       # ms
+MAX_SCROLL   = 100
+CARD_SEL     = 'div[data-index]'         # 모든 버전 공통
+ROOT_SEL_JS  = 'document.querySelector("#zg-grid-view-root") || document.querySelector(\'div[data-testid="gridViewport"]\')'
 
-# 모든 레이아웃에서 공통으로 등장하는 data-attribute
-CARD_SEL = '[data-p13n-asin-metadata]'
-ROOT_SEL = '#zg-grid-view-root, div[data-testid="gridViewport"]'   # 신규·구 레이아웃
+def create_context(play):
+    """Stealth Playwright context 생성"""
+    browser = play.chromium.launch(
+        headless=True,
+        args=[
+            "--disable-blink-features=AutomationControlled",
+            "--proxy-bypass-list=*",
+            "--disable-dev-shm-usage",
+            "--no-sandbox",
+        ],
+    )
+    ctx = browser.new_context(
+        locale="de-DE",
+        user_agent=HEADERS["User-Agent"],
+        extra_http_headers=HEADERS,
+        viewport={"width": 1366, "height": 900},
+    )
+    # stealth: navigator.webdriver 제거
+    ctx.add_init_script('Object.defineProperty(navigator, "webdriver", {get: () => undefined});')
+    return browser, ctx
 
-def fetch_cards(page_no: int):
-    """베스트셀러 한 페이지(1│2) 50 카드 확보 & BeautifulSoup 컨테이너 리스트 반환."""
+def is_captcha(html: str) -> bool:
+    return (
+        "Enter the characters you see below" in html
+        or "not a robot" in html.lower()
+        or "captcha" in html.lower()
+    )
+
+def fetch_cards(page_no: int, retries: int = 2):
     url = BASE_URL if page_no == 1 else f"{BASE_URL}?pg={page_no}&ref_=zg_bs_pg_{page_no}"
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True,
-                                    args=["--disable-blink-features=AutomationControlled"])
-        ctx = browser.new_context(
-            locale="de-DE",
-            user_agent=HEADERS["User-Agent"],
-            extra_http_headers=HEADERS,
-            viewport={"width": 1366, "height": 900},
-        )
-        pg = ctx.new_page()
+    for attempt in range(1, retries + 1):
+        with sync_playwright() as p:
+            browser, ctx = create_context(p)
+            pg = ctx.new_page()
 
-        try:
-            pg.goto(url, wait_until="domcontentloaded", timeout=60_000)
-        except PwTimeout:
+            try:
+                pg.goto(url, wait_until="domcontentloaded", timeout=60_000)
+            except PwTimeout:
+                browser.close()
+                if attempt == retries:
+                    raise RuntimeError("Amazon 로드 타임아웃")
+                continue
+
+            # HTML 초벌 캡차 확인
+            if is_captcha(pg.content()):
+                browser.close()
+                if attempt == retries:
+                    raise RuntimeError("Amazon CAPTCHA 차단(초기)")
+                time.sleep(random.uniform(2, 4))
+                continue
+
+            # 스크롤 컨테이너 확보
+            try:
+                pg.wait_for_selector(CARD_SEL, timeout=20_000)
+            except PwTimeout:
+                browser.close()
+                if attempt == retries:
+                    raise RuntimeError("카드 초기 로드 실패")
+                continue
+
+            last = 0
+            stagnate = 0
+            for _ in range(MAX_SCROLL):
+                cards = pg.query_selector_all(CARD_SEL)
+                if len(cards) >= MIN_CARDS:
+                    break
+
+                # 내부 컨테이너를 JS로 스크롤
+                pg.evaluate(f'''
+                    const root = {ROOT_SEL_JS};
+                    if(root) root.scrollBy(0, root.clientHeight);
+                ''')
+                pg.wait_for_timeout(SCROLL_WAIT)
+
+                cur = len(cards)
+                stagnate = stagnate + 1 if cur == last else 0
+                last = cur
+                if stagnate >= 12:
+                    break
+
+            html = pg.content()
             browser.close()
-            raise RuntimeError("Amazon 로드 타임아웃")
 
-        # 0. 내부 스크롤 컨테이너 확보
-        pg.wait_for_selector(ROOT_SEL.split(',')[0].strip(), timeout=20_000)
-        # 1. 첫 카드 나타날 때까지 대기
-        pg.wait_for_selector(CARD_SEL, timeout=20_000)
+        # CAPTCHA 재확인
+        if is_captcha(html):
+            if attempt == retries:
+                raise RuntimeError("Amazon CAPTCHA 차단(재시도 후)")
+            time.sleep(random.uniform(3, 6))
+            continue
 
-        last_cnt = 0
-        stagnate = 0
-        for i in range(MAX_SCROLLS):
-            cards = pg.query_selector_all(CARD_SEL)
-            if len(cards) >= MIN_CARDS:
-                break
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "lxml")
+        containers = soup.select(CARD_SEL)
+        if len(containers) < MIN_CARDS:
+            if attempt == retries:
+                raise RuntimeError(f"{page_no}페이지 카드 수집 실패: {len(containers)} / 50")
+            time.sleep(random.uniform(2, 4))
+            continue
 
-            # 마지막 카드 기준 스크롤 & 살짝 여유
-            cards[-1].scroll_into_view_if_needed(timeout=5_000)
-            pg.wait_for_timeout(SCROLL_PAUSE)
+        return containers  # ✅ 성공
 
-            # 변화 추적
-            cur_cnt = len(cards)
-            stagnate = stagnate + 1 if cur_cnt == last_cnt else 0
-            last_cnt = cur_cnt
-            if stagnate >= 10:          # 10 회 연속 카드 증가 0 → 정체
-                break
-        else:
-            browser.close()
-            raise RuntimeError(f"스크롤 {MAX_SCROLLS}회 초과")
-
-        html = pg.content()
-        browser.close()
-
-    soup = BeautifulSoup(html, "lxml")
-    containers = soup.select(CARD_SEL)
-
-    if len(containers) < MIN_CARDS:
-        raise RuntimeError(f"{page_no}페이지 카드 수집 실패: {len(containers)} / 50")
-
-    return containers
+    # 모든 재시도 실패
+    raise RuntimeError(f"{page_no}페이지 카드 확보 실패(재시도 {retries}회)")
 
 # ─────────────────────────────
 # 2. Parsing helpers
