@@ -43,8 +43,6 @@ for pg in range(1, 10):
         price=p.get_text(strip=True) if p else "—"
         print(f"   {i:>2}. {t} | {price}")
     all_cards.extend([(c, pg) for c in merged_cards])
-    if len(merged_cards) < 50:
-        break
 
 print(f"\n[INFO] total containers: {len(all_cards)}")
 
