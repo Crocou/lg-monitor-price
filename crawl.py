@@ -33,53 +33,75 @@ MAX_SCROLL_ITER = 20      # 안전장치: 스크롤 최대 시도 횟수
 # ─────────────────────────────
 # 1. Fetch helper (Playwright, 50개 확보 보장)
 # ─────────────────────────────
-def fetch_cards(page_number: int):
-    """해당 베스트셀러 페이지(1 or 2)에서 50개 카드 BeautifulSoup 객체 반환 리스트."""
-    target_url = (
-        BASE_URL if page_number == 1
-        else f"{BASE_URL}?pg={page_number}&ref_=zg_bs_pg_{page_number}"
-    )
+from playwright.sync_api import sync_playwright, TimeoutError as PwTimeout
+
+SCROLL_STEP_PX   = 800          # 한 번에 내릴 픽셀 (viewport 높이 정도)
+SCROLL_PAUSE_MS  = 600          # 스크롤 후 대기(ms)
+MAX_SCROLL_ITER  = 60           # 안전장치: 최대 60회 스크롤 (= 약 48,000px)
+
+def fetch_cards(page_number: int, min_cards: int = 50):
+    """
+    베스트셀러 페이지(1 또는 2)에서 min_cards개 이상 카드 DOM 반환.
+    스크롤/렌더링을 모두 끝낸 최종 HTML을 BeautifulSoup으로 파싱한다.
+    """
+    url = BASE_URL if page_number == 1 else f"{BASE_URL}?pg={page_number}&ref_=zg_bs_pg_{page_number}"
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(
+        browser  = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
+        context  = browser.new_context(
             locale="de-DE",
             user_agent=HEADERS["User-Agent"],
             extra_http_headers=HEADERS,
+            viewport={"width": 1280, "height": 800},   # 넉넉한 뷰포트
         )
         page = context.new_page()
-
         try:
-            page.goto(target_url, timeout=60_000)  # networkidle 대기
+            page.goto(url, wait_until="domcontentloaded", timeout=60_000)
         except PwTimeout:
             browser.close()
-            raise RuntimeError(f"Amazon 페이지 로드 타임아웃: {target_url}")
+            raise RuntimeError("Amazon 페이지 로드 타임아웃")
 
-        # 무한 스크롤 시뮬레이션 → 최소 50 카드 확보 또는 MAX_SCROLL_ITER 도달
+        sel = "div.zg-grid-general-faceout, div.p13n-sc-uncoverable-faceout"
+        last_count   = 0
+        last_height  = 0
+        stagnation   = 0
+
         for _ in range(MAX_SCROLL_ITER):
-            cards_cnt = page.eval_on_selector_all(
-                "div.zg-grid-general-faceout, div.p13n-sc-uncoverable-faceout",
-            )
-            if cards_cnt >= 50:
-                break
-            page.mouse.wheel(0, 10_000)            # 맨 아래로 휠
+            # 1) 아래로 조금씩 스크롤
+            page.evaluate(f"window.scrollBy(0, {SCROLL_STEP_PX});")
             page.wait_for_timeout(SCROLL_PAUSE_MS)
+
+            # 2) 현재 카드 수·문서 높이 측정
+            cards      = page.query_selector_all(sel)
+            card_count = len(cards)
+            height_now = page.evaluate("() => document.body.scrollHeight")
+
+            # 3) 조건 충족 시 조기 탈출
+            if card_count >= min_cards:
+                break
+
+            # 4) 변화 없으면 stagnation 증가
+            if card_count == last_count and height_now == last_height:
+                stagnation += 1
+            else:
+                stagnation = 0
+            if stagnation >= 4:   # 4번 연속 변화 없으면 더 내려도 의미 없다고 판단
+                break
+
+            last_count, last_height = card_count, height_now
         else:
             browser.close()
-            raise RuntimeError(
-            raise RuntimeError(
-                f"스크롤 한계({MAX_SCROLL_ITER})에 도달 – 카드 {len(cards)}개만 확인"
-            )
+            raise RuntimeError(f"스크롤 한계({MAX_SCROLL_ITER})에 도달 – 카드 {card_count}개만 확인")
 
+        # 최종 DOM → Soup
         html = page.content()
         browser.close()
 
     soup = BeautifulSoup(html, "lxml")
-    containers = soup.select("div.zg-grid-general-faceout") or \
-                 soup.select("div.p13n-sc-uncoverable-faceout")
+    containers = soup.select(sel)
 
-    if len(containers) < 50:
-        raise RuntimeError(f"카드 수집 실패: {page_number}페이지 {len(containers)}개")
+    if len(containers) < min_cards:
+        raise RuntimeError(f"{page_number}페이지 카드 수집 실패: {len(containers)} / {min_cards}")
 
     return containers
 
