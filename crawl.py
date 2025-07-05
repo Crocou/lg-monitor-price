@@ -1,11 +1,15 @@
+```python
 #!/usr/bin/env python3
-# crawl.py — Selenium 버전 (2025-07)
+# crawl.py — Selenium 버전 (GUI 모드)
 """
 Amazon.de 베스트셀러 ▸ Monitors 1~100위 중 LG 제품을 수집
- - Selenium + Chrome headless
+ - Selenium + Chrome (헤드리스 OFF)
  - 각 페이지(1·2) 50개 카드 확보를 보장
- - CAPTCHA 감지 시 스크린샷·HTML 저장 후 재시도
+ - CAPTCHA 감지 시 스크린샷·HTML 저장
  - Google Sheet(History, Today) 기록 + △ ▽ 계산
+
+주의: GitHub Actions 같은 CI 환경에선 반드시 "--headless=new" 플래그를
+추가해야 합니다. 로컬 디버깅을 위해 기본값을 GUI 모드로 설정했습니다.
 """
 
 import os, re, json, base64, datetime, time, random
@@ -42,15 +46,15 @@ from selenium.webdriver.common.by import By
 from selenium.common.exceptions import (
     WebDriverException,
     NoSuchElementException,
-    TimeoutException,
 )
 from webdriver_manager.chrome import ChromeDriverManager
 
 
 def get_driver() -> webdriver.Chrome:
+    """GUI(헤드리스 비활성화) Chrome 드라이버 생성"""
     opts = Options()
-    # 새 헤드리스 모드 (Chrome 115+). GitHub Actions 호환
-    opts.add_argument("--headless=new")
+    # 👉 헤드리스 비활성화: 디버깅 편의를 위해 주석 처리
+    # opts.add_argument("--headless=new")
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-gpu")
     opts.add_argument("--disable-dev-shm-usage")
@@ -93,7 +97,6 @@ def fetch_cards(page_no: int, driver: webdriver.Chrome, min_cards: int = 50) -> 
         save_debug("captcha_init", page_no, driver, html0)
         raise RuntimeError("Amazon CAPTCHA 차단(초기)")
 
-    # 내부 스크롤 컨테이너
     root = driver.execute_script(ROOT_JS)
     if root is None:
         save_debug("root_missing", page_no, driver, driver.page_source)
@@ -105,7 +108,9 @@ def fetch_cards(page_no: int, driver: webdriver.Chrome, min_cards: int = 50) -> 
         if len(cards) >= min_cards:
             break
 
-        driver.execute_script("arguments[0].scrollBy(0, arguments[0].clientHeight);", root)
+        driver.execute_script(
+            "arguments[0].scrollBy(0, arguments[0].clientHeight);", root
+        )
         time.sleep(0.4 + random.random() * 0.2)
 
         cur_cnt = len(cards)
@@ -135,7 +140,9 @@ def pick_title(card_soup):
     for sel in selectors:
         t = card_soup.select_one(sel)
         if t:
-            return (t.get("title") if sel == "[title]" else t.get_text(strip=True)) or ""
+            return (
+                t.get("title") if sel == "[title]" else t.get_text(strip=True)
+            ) or ""
     img = card_soup.select_one("img")
     return img.get("alt", "").strip() if img else ""
 
@@ -186,7 +193,9 @@ def crawl():
     for idx, (card, page) in enumerate(all_cards, start=1):
         rank_tag = card.select_one(".zg-badge-text")
         rank_on_page = (
-            int(rank_tag.get_text(strip=True).lstrip("#")) if rank_tag else ((idx - 1) % 50 + 1)
+            int(rank_tag.get_text(strip=True).lstrip("#"))
+            if rank_tag
+            else ((idx - 1) % 50 + 1)
         )
         abs_rank = (page - 1) * 50 + rank_on_page
 
@@ -223,7 +232,9 @@ def crawl():
     # 4. 날짜 컬럼
     # ─────────────────────────────
     kst = pytz.timezone("Asia/Seoul")
-    df_today["date"] = datetime.datetime.now(kst).strftime("%Y-%m-%d %H:%M:%S")
+    df_today["date"] = datetime.datetime.now(kst).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
 
     # ─────────────────────────────
     # 5. Google Sheets 기록
@@ -233,20 +244,21 @@ def crawl():
 
     SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
     SHEET_ID = os.environ["SHEET_ID"]
-    sa_json = json.loads(base64.b64decode(os.environ["GCP_SA_BASE64"]).decode())
+    sa_json = json.loads(
+        base64.b64decode(os.environ["GCP_SA_BASE64"]).decode()
+    )
     creds = Credentials.from_service_account_info(sa_json, scopes=SCOPES)
     sh = gspread.authorize(creds).open_by_key(SHEET_ID)
 
     def ensure_ws(name, rows=2000, cols=20):
         try:
             return sh.worksheet(name)
-        except gspread.WorksheetNotFound:
+        except Exception:
             return sh.add_worksheet(name, rows, cols)
 
     ws_hist = ensure_ws("History")
     ws_today = ensure_ws("Today", 100, 20)
 
-    # Δ 계산
     try:
         prev = pd.DataFrame(ws_hist.get_all_records())
     except Exception:
@@ -273,12 +285,22 @@ def crawl():
         return sym + (f"{abs(v):.2f}" if p else str(abs(int(v))))
 
     df_today["rank_delta"] = df_today["rank_delta_num"].apply(fmt)
-    df_today["price_delta"] = df_today["price_delta_num"].apply(lambda x: fmt(x, True))
+    df_today["price_delta"] = df_today["price_delta_num"].apply(
+        lambda x: fmt(x, True)
+    )
 
-    cols = ["asin", "title", "rank", "price", "url", "date", "rank_delta", "price_delta"]
+    cols = [
+        "asin",
+        "title",
+        "rank",
+        "price",
+        "url",
+        "date",
+        "rank_delta",
+        "price_delta",
+    ]
     df_today = df_today[cols].fillna("")
 
-    # 시트 업데이트
     if not ws_hist.get_all_values():
         ws_hist.append_row(cols, value_input_option="RAW")
     ws_hist.append_rows(df_today.values.tolist(), value_input_option="RAW")
@@ -302,3 +324,4 @@ if __name__ == "__main__":
             if attempt == 2:
                 raise
             time.sleep(5 + random.random() * 3)
+```
