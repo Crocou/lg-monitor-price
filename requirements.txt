@@ -5,4 +5,5 @@ requests
 beautifulsoup4
 lxml
 pytz
-playwright
+selenium            # NEW
+webdriver-manager   # NEW
