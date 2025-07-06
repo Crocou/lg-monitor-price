@@ -165,9 +165,9 @@ except gspread.exceptions.APIError:
 if not prev.empty and {"asin", "rank", "price", "date"} <= set(prev.columns):
     latest = (
         prev.sort_values("date")
-        .groupby("asin", as_index=False)
-        .last()[["asin", "rank", "price"]]
-        .rename(columns={"rank": "rank_prev", "price": "price_prev"})
+            .groupby("asin", as_index=False)
+            .last()[["asin", "rank", "price"]]
+            .rename(columns={"rank": "rank_prev", "price": "price_prev"})
     )
     df_today = df_today.merge(latest, on="asin", how="left")
 else:
@@ -185,8 +185,8 @@ df_today["price_delta_num"] = df_today["price"]      - df_today["price_prev"]
 def fmt(val, is_price=False):
     if pd.isna(val) or val == 0:
         return "-"
-    arrow = "▴" if val > 0 else "▾"
-    return f"{arrow} {abs(val):.2f}" if is_price else f"{arrow} {abs(int(val))}"
+    arrow = "▲" if val > 0 else "▼"
+    return f"{arrow}{abs(val):.2f}" if is_price else f"{arrow}{abs(int(val))}"
 
 df_today["rank_delta"]  = df_today["rank_delta_num"].apply(fmt)
 df_today["price_delta"] = df_today["price_delta_num"].apply(lambda x: fmt(x, True))
@@ -198,11 +198,37 @@ df_today = df_today[cols].fillna("")
 # ────────────────── 6-B. 시트 쓰기 ──────────────────
 # History: 헤더가 없으면 추가 후, 행 단위 append
 if not ws_hist.get_all_values():
-    ws_hist.append_row(cols, value_input_option="RAW")
-ws_hist.append_rows(df_today.values.tolist(), value_input_option="RAW")
+    ws_hist.append_row(cols, value_input_option="USER_ENTERED")
+ws_hist.append_rows(df_today.values.tolist(), value_input_option="USER_ENTERED")
 
 # Today: 기존 내용 지우고 새로 쓰기
 ws_today.clear()
-ws_today.update([cols] + df_today.values.tolist(), value_input_option="RAW")
+ws_today.update([cols] + df_today.values.tolist(), value_input_option="USER_ENTERED")
+
+# ────────────────── 6-C. ▲ / ▼ 서식 (빨강·파랑 + 볼드) ──────────────────
+from gspread_formatting import (
+    format_cell_ranges,
+    CellFormat,
+    TextFormat,
+    Color,
+)
+
+RED  = Color(1, 0, 0)   # RGB  (1,0,0) = 빨강
+BLUE = Color(0, 0, 1)   # RGB  (0,0,1) = 파랑
+
+delta_cols = {"rank_delta": "G", "price_delta": "H"}   # Today 시트 열 위치에 맞게 수정
+
+fmt_ranges = []
+for i, row in df_today.iterrows():
+    r = i + 2  # 헤더 다음부터 시작
+    for col_name, col_letter in delta_cols.items():
+        val = row[col_name]
+        if isinstance(val, str) and val.startswith("▲"):
+            fmt_ranges.append((f"{col_letter}{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=RED))))
+        elif isinstance(val, str) and val.startswith("▼"):
+            fmt_ranges.append((f"{col_letter}{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=BLUE))))
+
+if fmt_ranges:
+    format_cell_ranges(ws_today, fmt_ranges)
 
 print("✓ Google Sheet 업데이트 완료 — LG 모니터", len(df_today))
