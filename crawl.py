@@ -10,10 +10,7 @@ from google.oauth2.service_account import Credentials
 
 # ────────────────────────── 1. Selenium 준비 ──────────────────────────
 from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.service import Service as ChromeService
-from selenium.webdriver.chrome.options import Options as ChromeOptions
-from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.chrome.options import Options
 
 def get_driver():
     opt = Options()
@@ -28,8 +25,7 @@ def get_driver():
         "Chrome/126.0 Safari/537.36"
     )
 
-    service = webdriver.ChromeService()
-    driver = webdriver.Chrome(service=service, options=opt)
+    return webdriver.Chrome(options=opt)
 
 BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031/"  # pg=1|2
 
