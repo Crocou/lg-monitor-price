@@ -16,8 +16,8 @@ from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 
 def get_driver():
-    # ① Chrome 옵션
     opt = get_default_chrome_options()
+    driver = webdriver.Chrome(options=options)
     opt.add_argument("--headless=new")          # CI/서버용
     opt.add_argument("--no-sandbox")            # GitHub Actions 권장
     opt.add_argument("--disable-dev-shm-usage") # /dev/shm 용량 문제 방지
@@ -30,7 +30,6 @@ def get_driver():
     )
 
     service = webdriver.ChromeService()
-    return webdriver.Chrome(service=service, options=opt)
 
 BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031/"  # pg=1|2
 
