@@ -10,9 +10,11 @@ from google.oauth2.service_account import Credentials
 
 # ────────────────────────── 1. Selenium 준비 ──────────────────────────
 from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 
 def get_driver():
+    service = None 
     opt = Options()
     opt.add_argument("--headless=new")          # CI/서버용
     opt.add_argument("--no-sandbox")            # GitHub Actions 권장
@@ -24,8 +26,8 @@ def get_driver():
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/126.0 Safari/537.36"
     )
-
-    return webdriver.Chrome(options=opt)
+    driver = webdriver.Chrome(service=service, options=opt)
+    return driver
 
 BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031/"  # pg=1|2
 
