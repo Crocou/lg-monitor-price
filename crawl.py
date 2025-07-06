@@ -1,25 +1,26 @@
-# crawl_scroll.py
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Amazon.de 베스트셀러 ▸ Monitors 1~100위
 - LG 모니터 필터, 가격·순위·변동 기록 (스크롤 포함)
+- 배송지 PLZ 65760 적용
+- Google Sheet + ▲/▼ 색상·볼드 포맷
 """
 
-import os, re, json, base64, datetime, time, requests, pandas as pd, gspread, pytz
+import os, re, json, base64, datetime, time
+import pandas as pd, gspread, pytz
 from bs4 import BeautifulSoup
 from google.oauth2.service_account import Credentials
 
 # ────────────────────────── 1. Selenium 준비 ──────────────────────────
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-# from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 
-def get_driver():
-    service = None 
+def get_driver() -> webdriver.Chrome:
     opt = webdriver.ChromeOptions()
-    opt.add_argument("--headless=new")          # CI/서버용
-    opt.add_argument("--no-sandbox")            # GitHub Actions 권장
-    opt.add_argument("--disable-dev-shm-usage") # /dev/shm 용량 문제 방지
+    opt.add_argument("--headless=new")
+    opt.add_argument("--no-sandbox")
+    opt.add_argument("--disable-dev-shm-usage")
     opt.add_argument("--window-size=1280,4000")
     opt.add_argument("--lang=de-DE")
     opt.add_argument(
@@ -27,50 +28,53 @@ def get_driver():
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/126.0 Safari/537.36"
     )
+    # Selenium Manager 이용: service=None
+    return webdriver.Chrome(service=None, options=opt)
 
-    return webdriver.Chrome(service=service, options=opt)
+# ────────────────────────── 2. 도우미 ──────────────────────────
+def set_postcode(driver: webdriver.Chrome, zipcode="65760") -> None:
+    """첫 진입 시 배송지(우편번호) 입력"""
+    try:
+        driver.find_element(By.ID, "glow-ingress-block").click()
+        time.sleep(1)
+        zip_input = driver.find_element(By.ID, "GLUXZipUpdateInput")
+        zip_input.clear()
+        zip_input.send_keys(zipcode)
+        driver.find_element(By.ID, "GLUXZipUpdate").click()
+        time.sleep(2)
+        driver.find_element(By.NAME, "glowDoneButton").click()
+        time.sleep(1)
+    except Exception as e:
+        print("[WARN] 우편번호 설정 실패:", e)
 
-BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031/"  # pg=1|2
+def pick_price(card) -> str:
+    """가격 문자열 (독일 형식)"""
+    p = card.select_one("span.p13n-sc-price")
+    if p:
+        return p.get_text(strip=True)
 
-# ────────────────────────── 2. 페이지 가져오기 (스크롤 포함) ──────────────────────────
-def fetch_page_soup(page: int, driver):
-    url = BASE_URL if page == 1 else f"{BASE_URL}?pg={page}"
-    driver.get(url)
+    price_box = card.select_one("span.a-price")
+    if not price_box:
+        return ""
 
-    # ★ 2‑A. Amazon 쿠키(언어/통화) 강제 ‑ 선택 사항
-    driver.add_cookie({"name": "lc-main", "value": "de_DE"})
-    driver.add_cookie({"name": "i18n-prefs", "value": "EUR"})
-    driver.refresh()
+    whole = price_box.select_one("span.a-price-whole")
+    frac  = price_box.select_one("span.a-price-fraction")
+    if whole:
+        whole_num = re.sub(r"[^\d]", "", whole.get_text())
+        frac_num  = re.sub(r"[^\d]", "", frac.get_text()) if frac else "00"
+        return f"{whole_num},{frac_num}"
 
-    # ★ 2‑B. 스크롤 : 새 아이템이 더 이상 증가하지 않을 때까지
-    SCROLL_PAUSE = 30
-    last_count = 0
-    while True:
-        # 스크롤 끝까지
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(SCROLL_PAUSE)
+    return ""
 
-        cards_now = driver.find_elements(By.CSS_SELECTOR, "div.zg-grid-general-faceout, div.p13n-sc-uncoverable-faceout")
-        if len(cards_now) == last_count:   # 변화 없음 → 종료
-            break
-        last_count = len(cards_now)
+def money_to_float(txt: str):
+    if not txt:
+        return None
+    num = re.sub(r"[^\d,]", "", txt).replace(",", ".")
+    try:
+        return float(num)
+    except ValueError:
+        return None
 
-    # ★ 2‑C. BeautifulSoup 변환
-    html = driver.page_source
-    if "Enter the characters you see below" in html:
-        raise RuntimeError("Amazon CAPTCHA!")
-    soup = BeautifulSoup(html, "lxml")
-    return soup.select("div.zg-grid-general-faceout") or soup.select("div.p13n-sc-uncoverable-faceout")
-
-# ────────────────────────── 3. 전체 1‑100위 카드 수집 ──────────────────────────
-driver = get_driver()
-cards = []
-for pg in (1, 2):
-    cards += fetch_page_soup(pg, driver)
-driver.quit()
-print(f"[INFO] total cards fetched after scroll: {len(cards)}")  # 기대값 ≈ 100
-
-# ────────────────────────── 4. 이후 로직은 기존 코드 재사용 ──────────────────────────
 def pick_title(card):
     for sel in [
         'span[class*="p13n-sc-css-line-clamp"]',
@@ -80,83 +84,78 @@ def pick_title(card):
     ]:
         t = card.select_one(sel)
         if t:
-            txt = t.get("title", "") if sel == "[title]" else t.get_text(strip=True)
-            if txt:
-                return txt
+            return t.get("title", "") if sel == "[title]" else t.get_text(strip=True)
     img = card.select_one("img")
     return img.get("alt", "").strip() if img else ""
 
-def pick_price(card):
-    p = card.select_one("span.p13n-sc-price")
-    if p:
-        return p.get_text(strip=True)
-    whole = card.select_one("span.a-price-whole")
-    frac = card.select_one("span.a-price-fraction")
-    if whole:
-        txt = whole.get_text(strip=True).replace(".", "").replace(",", ".")
-        if frac:
-            txt += frac.get_text(strip=True)
-        return txt
-    return ""
+# ────────────────────────── 3. 페이지 크롤러 ──────────────────────────
+BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031/"  # pg=1|2
+SELECTOR = "div.zg-grid-general-faceout, div.p13n-sc-uncoverable-faceout"
 
-def money_to_float(txt):
-    val = re.sub(r"[^0-9,\.]", "", txt).replace(".", "").replace(",", ".")
-    try:
-        return float(val)
-    except:
-        return None
+def fetch_cards(page: int, driver):
+    url = BASE_URL if page == 1 else f"{BASE_URL}?pg={page}"
+    driver.get(url)
+    if page == 1:
+        set_postcode(driver, "65760")
+
+    # 스크롤로 50개 모두 로드
+    SCROLL_PAUSE = 5
+    last = 0; tries = 10
+    while tries:
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        time.sleep(SCROLL_PAUSE)
+        cur = len(driver.find_elements(By.CSS_SELECTOR, SELECTOR))
+        if cur == last or cur >= 50:
+            break
+        last = cur; tries -= 1
+
+    html = driver.page_source
+    soup = BeautifulSoup(html, "lxml")
+    return soup.select(SELECTOR)
+
+# ────────────────────────── 4. 실행 ──────────────────────────
+driver = get_driver()
+cards = []
+for pg in (1, 2):
+    cards += fetch_cards(pg, driver)
+driver.quit()
+print(f"[INFO] total cards fetched: {len(cards)}")   # 기대값 ≈ 100
 
 items = []
-for idx, card in enumerate(cards, start=1):       # ★ idx == 실제 랭킹 (1~100)
+for idx, card in enumerate(cards, start=1):
     a = card.select_one("a.a-link-normal[href*='/dp/']")
     if not a:
         continue
     title = pick_title(card) or a.get_text(" ", strip=True)
     if not re.search(r"\bLG\b", title, re.I):
-        continue                                     # LG 필터
+        continue
     link = "https://www.amazon.de" + a["href"].split("?", 1)[0]
     asin = re.search(r"/dp/([A-Z0-9]{10})", link).group(1)
     price_val = money_to_float(pick_price(card))
     items.append(
-        {
-            "asin": asin,
-            "title": title,
-            "url": link,
-            "price": price_val,
-            "rank": idx,            # ★ 스크롤 덕분에 정확
-        }
+        dict(asin=asin, title=title, url=link, price=price_val, rank=idx)
     )
 
 df_today = pd.DataFrame(items).sort_values("rank").reset_index(drop=True)
-
-# ────────────────────────── 5. 날짜 및 Google Sheet 기록 (기존 그대로) ──────────────────────────
 kst = pytz.timezone("Asia/Seoul")
 df_today["date"] = datetime.datetime.now(kst).strftime("%Y-%m-%d %H:%M:%S")
 
-# ────────────────────────── 6. Google Sheet 기록 ──────────────────────────
+# ────────────────────────── 5. Google Sheet 기록 ──────────────────────────
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 creds = Credentials.from_service_account_info(
-    json.loads(base64.b64decode(os.environ["GCP_SA_BASE64"]).decode()),
-    scopes=SCOPES,
+    json.loads(base64.b64decode(os.environ["GCP_SA_BASE64"]).decode()), scopes=SCOPES
 )
 gc = gspread.authorize(creds)
+sh = gc.open_by_key(os.environ["SHEET_ID"])
 
-SHEET_ID = os.environ["SHEET_ID"]
-sh = gc.open_by_key(SHEET_ID)
+def sheet(title, rows, cols):
+    return sh.worksheet(title) if title in [w.title for w in sh.worksheets()] \
+           else sh.add_worksheet(title, rows, cols)
 
-# 워크시트 핸들 확보(없으면 생성)
-ws_hist = (
-    sh.worksheet("History")
-    if "History" in [w.title for w in sh.worksheets()]
-    else sh.add_worksheet("History", rows=2000, cols=20)
-)
-ws_today = (
-    sh.worksheet("Today")
-    if "Today" in [w.title for w in sh.worksheets()]
-    else sh.add_worksheet("Today", rows=100, cols=20)
-)
+ws_hist = sheet("History", 2000, 20)
+ws_today = sheet("Today", 100, 20)
 
-# ────────────────── 6-A. 이전 History 불러와서 delta 계산 ──────────────────
+# 5-A. Δ 계산
 try:
     prev = pd.DataFrame(ws_hist.get_all_records()).dropna()
 except gspread.exceptions.APIError:
@@ -174,60 +173,46 @@ else:
     df_today["rank_prev"] = None
     df_today["price_prev"] = None
 
-# 숫자형 컬럼 변환 (문자열·빈값 → NaN)
 for col in ["price", "price_prev", "rank_prev"]:
     df_today[col] = pd.to_numeric(df_today[col], errors="coerce")
 
-# Δ 계산
 df_today["rank_delta_num"]  = df_today["rank_prev"]  - df_today["rank"]
 df_today["price_delta_num"] = df_today["price"]      - df_today["price_prev"]
 
-def fmt(val, is_price=False):
-    if pd.isna(val) or val == 0:
+def fmt(v, price=False):
+    if pd.isna(v) or v == 0:
         return "-"
-    arrow = "▲" if val > 0 else "▼"
-    return f"{arrow}{abs(val):.2f}" if is_price else f"{arrow}{abs(int(val))}"
+    arrow = "▲" if v > 0 else "▼"
+    return f"{arrow} {abs(v):.2f}" if price else f"{arrow} {abs(int(v))}"
 
 df_today["rank_delta"]  = df_today["rank_delta_num"].apply(fmt)
 df_today["price_delta"] = df_today["price_delta_num"].apply(lambda x: fmt(x, True))
 
-cols = ["asin", "title", "rank", "price", "url", "date",
-        "rank_delta", "price_delta"]
+cols = ["asin", "title", "rank", "price", "url", "date", "rank_delta", "price_delta"]
 df_today = df_today[cols].fillna("")
 
-# ────────────────── 6-B. 시트 쓰기 ──────────────────
-# History: 헤더가 없으면 추가 후, 행 단위 append
+# 5-B. Sheet 쓰기
 if not ws_hist.get_all_values():
     ws_hist.append_row(cols, value_input_option="USER_ENTERED")
 ws_hist.append_rows(df_today.values.tolist(), value_input_option="USER_ENTERED")
 
-# Today: 기존 내용 지우고 새로 쓰기
 ws_today.clear()
 ws_today.update([cols] + df_today.values.tolist(), value_input_option="USER_ENTERED")
 
-# ────────────────── 6-C. ▲ / ▼ 서식 (빨강·파랑 + 볼드) ──────────────────
-from gspread_formatting import (
-    format_cell_ranges,
-    CellFormat,
-    TextFormat,
-    Color,
-)
-
-RED  = Color(1, 0, 0)   # RGB  (1,0,0) = 빨강
-BLUE = Color(0, 0, 1)   # RGB  (0,0,1) = 파랑
-
-delta_cols = {"rank_delta": "G", "price_delta": "H"}   # Today 시트 열 위치에 맞게 수정
+# 5-C. ▲/▼ 서식
+from gspread_formatting import format_cell_ranges, CellFormat, TextFormat, Color
+RED, BLUE = Color(1,0,0), Color(0,0,1)
+delta_cols = {"rank_delta": "G", "price_delta": "H"}   # Today 시트 열
 
 fmt_ranges = []
 for i, row in df_today.iterrows():
-    r = i + 2  # 헤더 다음부터 시작
-    for col_name, col_letter in delta_cols.items():
-        val = row[col_name]
+    r = i + 2
+    for k, col in delta_cols.items():
+        val = row[k]
         if isinstance(val, str) and val.startswith("▲"):
-            fmt_ranges.append((f"{col_letter}{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=RED))))
+            fmt_ranges.append((f"{col}{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=RED))))
         elif isinstance(val, str) and val.startswith("▼"):
-            fmt_ranges.append((f"{col_letter}{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=BLUE))))
-
+            fmt_ranges.append((f"{col}{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=BLUE))))
 if fmt_ranges:
     format_cell_ranges(ws_today, fmt_ranges)
 
