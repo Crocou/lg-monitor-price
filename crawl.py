@@ -185,8 +185,8 @@ df_today["price_delta_num"] = df_today["price"]      - df_today["price_prev"]
 def fmt(val, is_price=False):
     if pd.isna(val) or val == 0:
         return "-"
-    arrow = "△" if val > 0 else "▽"
-    return f"{arrow}{abs(val):.2f}" if is_price else f"{arrow}{abs(int(val))}"
+    arrow = "▴" if val > 0 else "▾"
+    return f"{arrow} {abs(val):.2f}" if is_price else f"{arrow} {abs(int(val))}"
 
 df_today["rank_delta"]  = df_today["rank_delta_num"].apply(fmt)
 df_today["price_delta"] = df_today["price_delta_num"].apply(lambda x: fmt(x, True))
