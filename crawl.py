@@ -13,7 +13,6 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
 
 def get_driver():
     opt = Options()
@@ -26,8 +25,7 @@ def get_driver():
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/126.0 Safari/537.36"
     )
-    service = Service(ChromeDriverManager().install())
-    return webdriver.Chrome(service=service, options=opt)
+    return webdriver.Chrome(options=opt)
 
 BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031/"  # pg=1|2
 
