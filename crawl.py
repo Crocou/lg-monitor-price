@@ -29,11 +29,8 @@ def get_driver():
         "Chrome/126.0 Safari/537.36"
     )
 
-    # ② ChromeDriverManager가 내려받은 실행파일 경로를 Service에 전달
     service = Service(ChromeDriverManager().install())
-
-    # ③ webdriver.Chrome() → options = opt  (첫 인자 X), service = service
-    return webdriver.Chrome(options=opt, service=service)
+    return webdriver.Chrome(service=service, options=opt)
 
 BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031/"  # pg=1|2
 
