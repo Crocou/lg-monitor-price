@@ -8,6 +8,8 @@ Amazon.de 베스트셀러 ▸ Monitors 1~100위
 import os, re, json, base64, datetime, time, requests, pandas as pd, gspread, pytz
 from bs4 import BeautifulSoup
 from google.oauth2.service_account import Credentials
+import sys
+from selenium.common.exceptions import NoSuchElementException
 
 # ────────────────────────── 1. Selenium 준비 ──────────────────────────
 from selenium import webdriver
@@ -111,61 +113,55 @@ for pg in (1, 2):
 driver.quit()
 print(f"[INFO] total cards fetched after scroll: {len(cards)}")  # 기대값 ≈ 100
 
-# ────────────────────────── 4. 이후 로직은 기존 코드 재사용 ──────────────────────────
-def pick_title(card):
-    for sel in [
-        'span[class*="p13n-sc-css-line-clamp"]',
-        '[title]',
-        '.p13n-sc-truncate-desktop-type2',
-        '.zg-text-center-align span.a-size-base',
-    ]:
-        t = card.select_one(sel)
-        if t:
-            txt = t.get("title", "") if sel == "[title]" else t.get_text(strip=True)
-            if txt:
-                return txt
-    img = card.select_one("img")
-    return img.get("alt", "").strip() if img else ""
+# ─── 제목 추출 (절대 XPath 사용) ───────────────────────────────────
+TITLE_XPATH_ABS = (
+    '//div[@id="zg"]/div[2]/div[2]/div[1]/div[1]/div[2]/div[1]/ol[1]/li'
+    '/descendant-or-self::div[contains(@class,"_cDEzb_p13n-sc-css-line-clamp-2_EWgCb")]'
+)
 
-def pick_price(card):
-    p = card.select_one("span.p13n-sc-price")
-    if p:
-        return p.get_text(strip=True)
-    whole = card.select_one("span.a-price-whole")
-    frac = card.select_one("span.a-price-fraction")
-    if whole:
-        txt = whole.get_text(strip=True).replace(".", "").replace(",", ".")
-        if frac:
-            txt += frac.get_text(strip=True)
-        return txt
-    return ""
-
-def money_to_float(txt):
-    val = re.sub(r"[^0-9,\.]", "", txt).replace(".", "").replace(",", ".")
+def pick_title(driver, card_idx):
+    """
+    driver  : Selenium WebDriver
+    card_idx: 1-based 인덱스 (베스트셀러 카드 순서)
+    """
+    xpath = TITLE_XPATH_ABS.replace("/li", f"/li[{card_idx}]")
     try:
-        return float(val)
-    except:
-        return None
+        return driver.find_element(By.XPATH, xpath).text.strip()
+    except NoSuchElementException:
+        return ""
 
+# ─── 카드 파싱 루프 ──────────────────────────────────────────────
 items = []
-for idx, card in enumerate(cards, start=1):       # ★ idx == 실제 랭킹 (1~100)
-    a = card.select_one("a.a-link-normal[href*='/dp/']")
+for i, card in enumerate(cards, start=1):           # i == 1…100
+    a = card.select_one('a.a-link-normal[href*="/dp/"]')
     if not a:
         continue
-    title = pick_title(card) or a.get_text(" ", strip=True)
-    if not re.search(r"\bLG\b", title, re.I):
-        continue                                     # LG 필터
+
+    # ① 랭킹 (이전과 동일)
+    try:
+        rank_txt = card.find_element(By.XPATH, xpath_rank).text
+        rank = int(re.sub(r"[^\d]", "", rank_txt))
+    except (NoSuchElementException, ValueError):
+        continue
+
+    # ② 제목 (절대 XPath → pick_title 호출)
+    title = pick_title(driver, i)
+    if not title or not re.search(r"\bLG\b", title, re.I):
+        continue
+
+    # ③ 가격 (이전과 동일)
+    try:
+        price_txt = card.find_element(By.XPATH, xpath_price).text
+    except NoSuchElementException:
+        price_txt = ""
+    price_val = money_to_float(price_txt)
+
+    # ④ 기타 정보
     link = "https://www.amazon.de" + a["href"].split("?", 1)[0]
     asin = re.search(r"/dp/([A-Z0-9]{10})", link).group(1)
-    price_val = money_to_float(pick_price(card))
+
     items.append(
-        {
-            "asin": asin,
-            "title": title,
-            "url": link,
-            "price": price_val,
-            "rank": idx,            # ★ 스크롤 덕분에 정확
-        }
+        {"asin": asin, "title": title, "url": link, "price": price_val, "rank": rank}
     )
 
 df_today = pd.DataFrame(items).sort_values("rank").reset_index(drop=True)
