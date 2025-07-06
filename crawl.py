@@ -40,7 +40,7 @@ def fetch_page_soup(page: int, driver):
     driver.refresh()
 
     # ★ 2‑B. 스크롤 : 새 아이템이 더 이상 증가하지 않을 때까지
-    SCROLL_PAUSE = 1
+    SCROLL_PAUSE = 5
     last_count = 0
     while True:
         # 스크롤 끝까지
