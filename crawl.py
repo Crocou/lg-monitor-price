@@ -11,8 +11,8 @@ from google.oauth2.service_account import Credentials
 # ────────────────────────── 1. Selenium 준비 ──────────────────────────
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 
 def get_driver():
@@ -27,10 +27,10 @@ def get_driver():
         "Chrome/126.0 Safari/537.36"
     )
 
-    # ✅ 서비스 객체로 경로 명시
-    service = Service(executable_path=ChromeDriverManager().install())
+    # ✅ 여기서 드라이버 경로를 서비스 객체로 감싼다
+    service = Service(ChromeDriverManager().install())
 
-    # ✅ service, options 모두 키워드 인자로 명확히 전달
+    # ✅ 올바른 Chrome 생성자
     return webdriver.Chrome(service=service, options=options)
 
 BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031/"  # pg=1|2
