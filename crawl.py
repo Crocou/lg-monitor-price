@@ -11,20 +11,26 @@ from google.oauth2.service_account import Credentials
 # ────────────────────────── 1. Selenium 준비 ──────────────────────────
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
 
 def get_driver():
-    opt = Options()
-    opt.add_argument("--headless=new")
-    opt.add_argument("--disable-gpu")
-    opt.add_argument("--window-size=1280,4000")
-    opt.add_argument("--lang=de-DE")
-    opt.add_argument(
+    options = Options()
+    options.add_argument("--headless=new")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1280,4000")
+    options.add_argument("--lang=de-DE")
+    options.add_argument(
         "user-agent=Mozilla/5.0 (X11; Linux x86_64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/126.0 Safari/537.36"
     )
+
+    # ✅ 서비스 객체로 경로 명시
+    service = Service(executable_path=ChromeDriverManager().install())
+
+    # ✅ service, options 모두 키워드 인자로 명확히 전달
     return webdriver.Chrome(service=service, options=options)
 
 BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031/"  # pg=1|2
