@@ -2,43 +2,20 @@ name: Crawl Amazon best sellers & update sheet
 
 on:
   schedule:
-    - cron: '0 21 * * *'           # 매일 06:00 KST
+    - cron: '0 21 * * *'   # 매일 06:00 KST (UTC 21:00)
   workflow_dispatch:
 
 jobs:
   crawl:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
-      # Chrome 설치 (ubuntu-latest에 이미 있으나 최신화)
-      - name: Install Chrome
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y google-chrome-stable
-
-      # Selenium & 기타 파이썬 패키지 설치
-      - name: Install Python deps
-        run: pip install -r requirements.txt
-
-      # 크롤러 실행
+      - run: pip install -r requirements.txt
       - name: Run crawler
         env:
-          SHEET_ID:      ${{ secrets.SHEET_ID }}
-          GCP_SA_BASE64: ${{ secrets.GCP_SA_BASE64 }}
+          SHEET_ID:        ${{ secrets.SHEET_ID }}
+          GCP_SA_BASE64:   ${{ secrets.GCP_SA_BASE64 }}
         run: python crawl.py
-
-      # 실패 시 디버그 캡처 업로드
-      - name: Upload debug artifacts
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: crawl-debug
-          path: |
-            *.png
-            *.html
