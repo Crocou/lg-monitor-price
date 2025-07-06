@@ -79,7 +79,7 @@ def fetch_page_soup(page: int, driver):
     while True:
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
         time.sleep(SCROLL_PAUSE)
-         cards_now = driver.find_elements(By.CSS_SELECTOR, "li.zg-no-numbers")
+        cards_now = driver.find_elements(By.CSS_SELECTOR, "li.zg-no-numbers")
         if len(cards_now) == last_count:
             break
         last_count = len(cards_now)
