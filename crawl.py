@@ -11,11 +11,11 @@ from google.oauth2.service_account import Credentials
 # ────────────────────────── 1. Selenium 준비 ──────────────────────────
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
+# from selenium.webdriver.chrome.options import Options
 
 def get_driver():
     service = None 
-    opt = Options()
+    opt = webdriver.ChromeOptions()
     opt.add_argument("--headless=new")          # CI/서버용
     opt.add_argument("--no-sandbox")            # GitHub Actions 권장
     opt.add_argument("--disable-dev-shm-usage") # /dev/shm 용량 문제 방지
