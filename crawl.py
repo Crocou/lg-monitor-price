@@ -133,6 +133,70 @@ df_today = pd.DataFrame(items).sort_values("rank").reset_index(drop=True)
 kst = pytz.timezone("Asia/Seoul")
 df_today["date"] = datetime.datetime.now(kst).strftime("%Y-%m-%d %H:%M:%S")
 
-# … 이하 History 비교·업데이트 부분은 기존 코드와 동일 …
+# ────────────────────────── 6. Google Sheet 기록 ──────────────────────────
+# ① 서비스 계정 인증
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+creds = Credentials.from_service_account_info(
+    json.loads(base64.b64decode(os.environ["GCP_SA_BASE64"]).decode()),
+    scopes=SCOPES,
+)
+gc = gspread.authorize(creds)
 
-print("✓ 업데이트 완료: LG 모니터", len(df_today))
+# ② 스프레드시트/워크시트 핸들
+SHEET_ID = os.environ["SHEET_ID"]
+sh = gc.open_by_key(SHEET_ID)
+ws_hist = (
+    sh.worksheet("History")
+    if "History" in [w.title for w in sh.worksheets()]
+    else sh.add_worksheet("History", rows=2000, cols=20)
+)
+ws_today = (
+    sh.worksheet("Today")
+    if "Today" in [w.title for w in sh.worksheets()]
+    else sh.add_worksheet("Today", rows=100, cols=20)
+)
+
+# ③ 변동(Δ) 계산 — 이전 히스토리가 있으면
+try:
+    prev = pd.DataFrame(ws_hist.get_all_records()).dropna()
+except gspread.exceptions.APIError:
+    prev = pd.DataFrame()
+
+if not prev.empty and {"asin", "rank", "price", "date"} <= set(prev.columns):
+    latest = (
+        prev.sort_values("date")
+        .groupby("asin", as_index=False)
+        .last()[["asin", "rank", "price"]]
+        .rename(columns={"rank": "rank_prev", "price": "price_prev"})
+    )
+    df_today = df_today.merge(latest, on="asin", how="left")
+    df_today["rank_delta_num"] = df_today["rank_prev"] - df_today["rank"]
+    df_today["price_delta_num"] = df_today["price"] - df_today["price_prev"]
+else:
+    df_today["rank_delta_num"] = None
+    df_today["price_delta_num"] = None
+
+# ④ 보기 좋게 포맷
+def fmt(val, is_price=False):
+    if pd.isna(val) or val == 0:
+        return "-"
+    arrow = "△" if val > 0 else "▽"
+    return f"{arrow}{abs(val):.2f}" if is_price else f"{arrow}{abs(int(val))}"
+
+df_today["rank_delta"] = df_today["rank_delta_num"].apply(fmt)
+df_today["price_delta"] = df_today["price_delta_num"].apply(lambda x: fmt(x, True))
+
+cols = ["asin", "title", "rank", "price", "url", "date", "rank_delta", "price_delta"]
+df_today = df_today[cols].fillna("")
+
+# ⑤ 시트에 쓰기
+#    - History: append (누적)
+#    - Today  : 전체 덮어쓰기 (최신 스냅샷)
+if not ws_hist.get_all_values():
+    ws_hist.append_row(cols, value_input_option="RAW")
+ws_hist.append_rows(df_today.values.tolist(), value_input_option="RAW")
+
+ws_today.clear()
+ws_today.update([cols] + df_today.values.tolist(), value_input_option="RAW")
+
+print("✓ Google Sheet 업데이트 완료 — LG 모니터", len(df_today))
