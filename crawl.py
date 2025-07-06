@@ -29,7 +29,7 @@ def get_driver():
         "Chrome/126.0 Safari/537.36"
     )
 
-    service = Service(ChromeDriverManager().install())
+    service = webdriver.ChromeService()
     return webdriver.Chrome(service=service, options=opt)
 
 BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031/"  # pg=1|2
