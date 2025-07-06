@@ -75,6 +75,35 @@ CARD_SEL = (
 BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031/"
 CARD_SEL = "li.zg-no-numbers"
 
+
+def money_to_float(txt: str):
+    """'€196,79' 또는 '€196.79' → 196.79 (float)"""
+    if not txt:
+        return None
+    # NBSP·좁은공백 제거
+    txt = txt.replace("\u00a0", "").replace("\u202f", "")
+    # 통화·문자 제거
+    txt_clean = re.sub(r"[^\d,\.]", "", txt)
+
+    # 소수 구분자 감지
+    if "," in txt_clean and "." in txt_clean:
+        # 마지막 구분자를 소수점으로 간주
+        if txt_clean.rfind(",") > txt_clean.rfind("."):
+            txt_clean = txt_clean.replace(".", "").replace(",", ".")
+        else:
+            txt_clean = txt_clean.replace(",", "")
+    elif "," in txt_clean and "." not in txt_clean:
+        txt_clean = txt_clean.replace(",", ".")
+    else:
+        txt_clean = txt_clean  # 이미 '.'만 있거나 구분자 없음
+
+    try:
+        return float(txt_clean)
+    except ValueError:
+        logging.warning(f"가격 변환 실패: {txt}")
+        return None
+
+
 def fetch_cards_and_parse(page: int, driver):
     url = BASE_URL if page == 1 else f"{BASE_URL}?pg={page}"
     driver.get(url)
@@ -97,13 +126,16 @@ def fetch_cards_and_parse(page: int, driver):
     parsed_items = []
 
     for idx, card in enumerate(cards, start=1):
+        # ───── 랭크 ─────
         try:
             rank_el = card.find_element(By.XPATH, './/span[contains(@class,"zg-bdg-text")]')
-            rank = int(re.sub(r"\D", "", rank_el.text))
+            rank_text = rank_el.text.strip()
+            rank = int(re.sub(r"\D", "", rank_text))  # "#1" → "1"
         except (NoSuchElementException, ValueError, StaleElementReferenceException):
             logging.warning(f"[{idx}] 랭크 추출 실패 → 건너뜀")
             continue
 
+        # ───── 제목 ─────
         try:
             try:
                 title = card.find_element(By.XPATH, './/div[contains(@class,"_cDEzb_p13n-sc-css-line-clamp-2_EWgCb")]').text.strip()
@@ -112,27 +144,29 @@ def fetch_cards_and_parse(page: int, driver):
         except Exception:
             title = ""
 
-        lg_match = bool(re.search(r"\\bLG\\b", title, re.I))
+        # NBSP 대체 후 LG 여부 체크
+        title_norm = title.replace("\u00a0", " ").replace("\u202f", " ")
+        lg_match = bool(re.search(r"\bLG\b", title_norm, re.I))
 
+        # ───── 가격 ─────
         try:
             price_raw = card.find_element(By.XPATH, './/span[contains(@class,"p13n-sc-price")]').text.strip()
         except NoSuchElementException:
             price_raw = ""
 
-        price_val = re.sub(r"[^\\d,\.]", "", price_raw).replace(".", "").replace(",", ".")
-        try:
-            price_val = float(price_val)
-        except ValueError:
-            price_val = None
+        price_val = money_to_float(price_raw)
 
+        # ───── 링크/ASIN ─────
         try:
             a = card.find_element(By.XPATH, './/a[contains(@href,"/dp/")]')
-            link = "https://www.amazon.de" + a.get_attribute("href").split("?", 1)[0]
+            href = a.get_attribute("href")
+            link = href.split("?", 1)[0] if href.startswith("http") else "https://www.amazon.de" + href.split("?", 1)[0]
             asin = re.search(r"/dp/([A-Z0-9]{10})", link).group(1)
         except Exception:
             logging.warning(f"[{idx}] 링크/ASIN 추출 실패 → 건너뜀")
             continue
 
+        # ───── 로깅 및 결과 ─────
         card_info = {
             "rank": rank,
             "title": title,
@@ -145,9 +179,13 @@ def fetch_cards_and_parse(page: int, driver):
         logging.info(f"CARD_DATA {json.dumps(card_info, ensure_ascii=False)}")
 
         if lg_match:
-            parsed_items.append(
-                {"asin": asin, "title": title, "url": link, "price": price_val, "rank": rank}
-            )
+            parsed_items.append({
+                "asin": asin,
+                "title": title,
+                "url": link,
+                "price": price_val,
+                "rank": rank,
+            })
 
     return parsed_items
 
