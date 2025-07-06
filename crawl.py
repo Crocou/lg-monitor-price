@@ -133,57 +133,76 @@ df_today = pd.DataFrame(items).sort_values("rank").reset_index(drop=True)
 kst = pytz.timezone("Asia/Seoul")
 df_today["date"] = datetime.datetime.now(kst).strftime("%Y-%m-%d %H:%M:%S")
 
+# ────────────────────────── 6. Google Sheet 기록 ──────────────────────────
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-SHEET_ID = os.environ['SHEET_ID']
-sa_json = json.loads(base64.b64decode(os.environ['GCP_SA_BASE64']).decode())
-creds = Credentials.from_service_account_info(sa_json, scopes=SCOPES)
-sh = gspread.authorize(creds).open_by_key(SHEET_ID)
+creds = Credentials.from_service_account_info(
+    json.loads(base64.b64decode(os.environ["GCP_SA_BASE64"]).decode()),
+    scopes=SCOPES,
+)
+gc = gspread.authorize(creds)
 
-def ensure_ws(name, rows=2000, cols=20):
-    try:
-        return sh.worksheet(name)
-    except gspread.WorksheetNotFound:
-        return sh.add_worksheet(name, rows, cols)
+SHEET_ID = os.environ["SHEET_ID"]
+sh = gc.open_by_key(SHEET_ID)
 
-ws_hist = ensure_ws('History')
-ws_today = ensure_ws('Today', 100, 20)
+# 워크시트 핸들 확보(없으면 생성)
+ws_hist = (
+    sh.worksheet("History")
+    if "History" in [w.title for w in sh.worksheets()]
+    else sh.add_worksheet("History", rows=2000, cols=20)
+)
+ws_today = (
+    sh.worksheet("Today")
+    if "Today" in [w.title for w in sh.worksheets()]
+    else sh.add_worksheet("Today", rows=100, cols=20)
+)
 
-# ─────────────────────────────
-# 5. Δ 계산
-# ─────────────────────────────
+# ────────────────── 6-A. 이전 History 불러와서 delta 계산 ──────────────────
 try:
-    prev = pd.DataFrame(ws_hist.get_all_records())
-except:
+    prev = pd.DataFrame(ws_hist.get_all_records()).dropna()
+except gspread.exceptions.APIError:
     prev = pd.DataFrame()
 
-if not prev.empty and set(['asin', 'rank', 'price', 'date']).issubset(prev.columns):
-    latest = (prev.sort_values('date')
-              .groupby('asin', as_index=False)
-              .last()[['asin', 'rank', 'price']]
-              .rename(columns={'rank': 'rank_prev', 'price': 'price_prev'}))
-    df_today = df_today.merge(latest, on='asin', how='left')
-    df_today['rank_delta_num'] = df_today['rank_prev'] - df_today['rank']
-    df_today['price_delta_num'] = df_today['price'] - df_today['price_prev']
+if not prev.empty and {"asin", "rank", "price", "date"} <= set(prev.columns):
+    latest = (
+        prev.sort_values("date")
+        .groupby("asin", as_index=False)
+        .last()[["asin", "rank", "price"]]
+        .rename(columns={"rank": "rank_prev", "price": "price_prev"})
+    )
+    df_today = df_today.merge(latest, on="asin", how="left")
 else:
-    df_today['rank_delta_num'] = None
-    df_today['price_delta_num'] = None
+    df_today["rank_prev"] = None
+    df_today["price_prev"] = None
 
-fmt = lambda v, p=False: '-' if (pd.isna(v) or v == 0) else (('△' if v > 0 else '▽') + (f"{abs(v):.2f}" if p else str(abs(int(v)))))
+# 숫자형 컬럼 변환 (문자열·빈값 → NaN)
+for col in ["price", "price_prev", "rank_prev"]:
+    df_today[col] = pd.to_numeric(df_today[col], errors="coerce")
 
-df_today['rank_delta'] = df_today['rank_delta_num'].apply(fmt)
-df_today['price_delta'] = df_today['price_delta_num'].apply(lambda x: fmt(x, True))
+# Δ 계산
+df_today["rank_delta_num"]  = df_today["rank_prev"]  - df_today["rank"]
+df_today["price_delta_num"] = df_today["price"]      - df_today["price_prev"]
 
-cols = ['asin', 'title', 'rank', 'price', 'url', 'date', 'rank_delta', 'price_delta']
-df_today = df_today[cols]
+def fmt(val, is_price=False):
+    if pd.isna(val) or val == 0:
+        return "-"
+    arrow = "△" if val > 0 else "▽"
+    return f"{arrow}{abs(val):.2f}" if is_price else f"{arrow}{abs(int(val))}"
 
-# Replace NaN → "" for JSON
-df_today = df_today.fillna("")
+df_today["rank_delta"]  = df_today["rank_delta_num"].apply(fmt)
+df_today["price_delta"] = df_today["price_delta_num"].apply(lambda x: fmt(x, True))
 
-# ─────────────────────────────
-# 6. Sheet update
-# ─────────────────────────────
+cols = ["asin", "title", "rank", "price", "url", "date",
+        "rank_delta", "price_delta"]
+df_today = df_today[cols].fillna("")
+
+# ────────────────── 6-B. 시트 쓰기 ──────────────────
+# History: 헤더가 없으면 추가 후, 행 단위 append
 if not ws_hist.get_all_values():
-    ws_hist.append_row(cols, value_input_option='RAW')
-ws_hist.append_rows(df_today.values.tolist(), value_input_option='RAW')
+    ws_hist.append_row(cols, value_input_option="RAW")
+ws_hist.append_rows(df_today.values.tolist(), value_input_option="RAW")
+
+# Today: 기존 내용 지우고 새로 쓰기
 ws_today.clear()
-ws_today.update([cols] + df_today.values.tolist(), value_input_option='RAW')
+ws_today.update([cols] + df_today.values.tolist(), value_input_option="RAW")
+
+print("✓ Google Sheet 업데이트 완료 — LG 모니터", len(df_today))
