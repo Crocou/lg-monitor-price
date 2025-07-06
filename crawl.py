@@ -128,17 +128,8 @@ def pick_title(card):
     return img.get("alt", "").strip() if img else ""
 
 def pick_price(card):
-    p = card.select_one("span.p13n-sc-price")
-    if p:
-        return p.get_text(strip=True)
-    whole = card.select_one("span.a-price-whole")
-    frac = card.select_one("span.a-price-fraction")
-    if whole:
-        txt = whole.get_text(strip=True).replace(".", "").replace(",", ".")
-        if frac:
-            txt += frac.get_text(strip=True)
-        return txt
-    return ""
+    p = card.select_one('span._cDEzb_p13n-sc-price_3mJ9Z')
+    return p.get_text(strip=True) if p else ""
 
 def money_to_float(txt):
     val = re.sub(r"[^0-9,\.]", "", txt).replace(".", "").replace(",", ".")
