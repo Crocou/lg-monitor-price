@@ -13,10 +13,11 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 
 def get_driver():
     opt = Options()
-    opt.add_argument("--headless=new")       # Chrome 122+
+    opt.add_argument("--headless=new")
     opt.add_argument("--disable-gpu")
     opt.add_argument("--window-size=1280,4000")
     opt.add_argument("--lang=de-DE")
@@ -25,7 +26,8 @@ def get_driver():
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/126.0 Safari/537.36"
     )
-    return webdriver.Chrome(ChromeDriverManager().install(), options=opt)
+    service = Service(ChromeDriverManager().install())
+    return webdriver.Chrome(service=service, options=opt)
 
 BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031/"  # pg=1|2
 
