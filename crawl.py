@@ -124,21 +124,6 @@ def pick_price(card):
     p = card.select_one("span.p13n-sc-price")
     if p:
         return p.get_text(strip=True)
-    whole = card.select_one("span.a-price-whole")
-    frac = card.select_one("span.a-price-fraction")
-    if whole:
-        txt = whole.get_text(strip=True).replace(".", "").replace(",", ".")
-        if frac:
-            txt += frac.get_text(strip=True)
-        return txt
-    return ""
-
-def money_to_float(txt):
-    val = re.sub(r"[^0-9,\.]", "", txt).replace(".", "").replace(",", ".")
-    try:
-        return float(val)
-    except:
-        return None
 
 items = []
 for idx, card in enumerate(cards, start=1):       # ★ idx == 실제 랭킹 (1~100)
@@ -150,7 +135,7 @@ for idx, card in enumerate(cards, start=1):       # ★ idx == 실제 랭킹 (1~
         continue                                     # LG 필터
     link = "https://www.amazon.de" + a["href"].split("?", 1)[0]
     asin = re.search(r"/dp/([A-Z0-9]{10})", link).group(1)
-    price_val = money_to_float(pick_price(card))
+    price_val = pick_price(card)
     items.append(
         {
             "asin": asin,
