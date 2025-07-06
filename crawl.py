@@ -16,22 +16,24 @@ from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 
 def get_driver():
-    options = Options()
-    options.add_argument("--headless=new")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1280,4000")
-    options.add_argument("--lang=de-DE")
-    options.add_argument(
+    # ① Chrome 옵션
+    opt = Options()
+    opt.add_argument("--headless=new")          # CI/서버용
+    opt.add_argument("--no-sandbox")            # GitHub Actions 권장
+    opt.add_argument("--disable-dev-shm-usage") # /dev/shm 용량 문제 방지
+    opt.add_argument("--window-size=1280,4000")
+    opt.add_argument("--lang=de-DE")
+    opt.add_argument(
         "user-agent=Mozilla/5.0 (X11; Linux x86_64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/126.0 Safari/537.36"
     )
 
-    # ✅ 여기서 드라이버 경로를 서비스 객체로 감싼다
+    # ② ChromeDriverManager가 내려받은 실행파일 경로를 Service에 전달
     service = Service(ChromeDriverManager().install())
 
-    # ✅ 올바른 Chrome 생성자
-    return webdriver.Chrome(service=service, options=options)
+    # ③ webdriver.Chrome() → options = opt  (첫 인자 X), service = service
+    return webdriver.Chrome(options=opt, service=service)
 
 BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031/"  # pg=1|2
 
