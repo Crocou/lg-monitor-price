@@ -1,7 +1,8 @@
-# crawl_scroll.py
+# crawl_scroll_zip65760.py
 """
 Amazon.de 베스트셀러 ▸ Monitors 1~100위
 - LG 모니터 필터, 가격·순위·변동 기록 (스크롤 포함)
+- ★ 배송지(우편번호) 65760 고정
 """
 
 import os, re, json, base64, datetime, time, requests, pandas as pd, gspread, pytz
@@ -15,7 +16,7 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 
 def get_driver():
-    service = None 
+    service = None
     opt = webdriver.ChromeOptions()
     opt.add_argument("--headless=new")          # CI/서버용
     opt.add_argument("--no-sandbox")            # GitHub Actions 권장
@@ -27,8 +28,38 @@ def get_driver():
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/126.0 Safari/537.36"
     )
-
     return webdriver.Chrome(service=service, options=opt)
+
+# ★ 1-A. 우편번호 고정 함수 --------------------------------------------------------
+def set_zip(driver, zip_code="65760"):
+    """
+    현재 세션에 배송지 ZIP 코드를 고정한다.
+    Amazon의 address-change AJAX 엔드포인트에 한 번 POST → 쿠키·세션 갱신
+    """
+    payload = (
+        f"locationType=LOCATION_INPUT&zipCode={zip_code}"
+        "&storeContext=computers&deviceType=web&pageType=Detail&actionSource=glow"
+    )
+    script = """
+        const zip = arguments[0];
+        const body = arguments[1];
+        const done = arguments[2];
+
+        fetch("https://www.amazon.de/gp/delivery/ajax/address-change.html", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "X-Requested-With": "XMLHttpRequest"
+            },
+            body: body
+        })
+        .then(() => done())
+        .catch(() => done());
+    """
+    driver.execute_async_script(script, zip_code, payload)
+    driver.refresh()               # 새 쿠키 기준으로 페이지 재로드
+    time.sleep(1)                  # 쿠키 적용까지 1초 여유
+# --------------------------------------------------------------------------
 
 BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031/"  # pg=1|2
 
@@ -37,33 +68,36 @@ def fetch_page_soup(page: int, driver):
     url = BASE_URL if page == 1 else f"{BASE_URL}?pg={page}"
     driver.get(url)
 
-    # ★ 2‑A. Amazon 쿠키(언어/통화) 강제 ‑ 선택 사항
+    # ★ 2-A. Amazon 쿠키(언어/통화) 강제 (우편번호와 별개)
     driver.add_cookie({"name": "lc-main", "value": "de_DE"})
     driver.add_cookie({"name": "i18n-prefs", "value": "EUR"})
     driver.refresh()
 
-    # ★ 2‑B. 스크롤 : 새 아이템이 더 이상 증가하지 않을 때까지
+    # ★ 2-B. 스크롤 : 새 아이템이 더 이상 증가하지 않을 때까지
     SCROLL_PAUSE = 30
     last_count = 0
     while True:
-        # 스크롤 끝까지
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
         time.sleep(SCROLL_PAUSE)
-
         cards_now = driver.find_elements(By.CSS_SELECTOR, "div.zg-grid-general-faceout, div.p13n-sc-uncoverable-faceout")
-        if len(cards_now) == last_count:   # 변화 없음 → 종료
+        if len(cards_now) == last_count:
             break
         last_count = len(cards_now)
 
-    # ★ 2‑C. BeautifulSoup 변환
+    # ★ 2-C. BeautifulSoup 변환
     html = driver.page_source
     if "Enter the characters you see below" in html:
         raise RuntimeError("Amazon CAPTCHA!")
     soup = BeautifulSoup(html, "lxml")
     return soup.select("div.zg-grid-general-faceout") or soup.select("div.p13n-sc-uncoverable-faceout")
 
-# ────────────────────────── 3. 전체 1‑100위 카드 수집 ──────────────────────────
+# ────────────────────────── 3. 전체 1-100위 카드 수집 ──────────────────────────
 driver = get_driver()
+
+# ★ 3-A. 세션 시작 시 ZIP 고정 (한 번만 호출)
+driver.get("https://www.amazon.de/")   # 아무 페이지나 먼저 접속
+set_zip(driver, "65760")               # ← 우편번호 고정
+
 cards = []
 for pg in (1, 2):
     cards += fetch_page_soup(pg, driver)
@@ -129,7 +163,7 @@ for idx, card in enumerate(cards, start=1):       # ★ idx == 실제 랭킹 (1~
 
 df_today = pd.DataFrame(items).sort_values("rank").reset_index(drop=True)
 
-# ────────────────────────── 5. 날짜 및 Google Sheet 기록 (기존 그대로) ──────────────────────────
+# ────────────────────────── 5. 날짜 및 Google Sheet 기록 (기존 그대로) ──────────────────────────
 kst = pytz.timezone("Asia/Seoul")
 df_today["date"] = datetime.datetime.now(kst).strftime("%Y-%m-%d %H:%M:%S")
 
