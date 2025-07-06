@@ -7,3 +7,4 @@ lxml
 pytz
 selenium            # NEW
 webdriver-manager   # NEW
+gspread-formatting  # NEW
