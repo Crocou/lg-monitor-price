@@ -5,20 +5,32 @@ Amazon.de 베스트셀러 ▸ Monitors 1~100위
 - ★ 배송지(우편번호) 65760 고정
 """
 
-import sys, os, re, json, base64, datetime, time, requests, pandas as pd, gspread, pytz
+import sys, os, re, json, base64, datetime, time, logging
+import requests, pandas as pd, gspread, pytz
 from google.oauth2.service_account import Credentials
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import NoSuchElementException
 from gspread_formatting import format_cell_ranges, CellFormat, TextFormat, Color
 
+# ─── 0. 로깅 설정 ──────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler("crawl_cards.log", encoding="utf-8"),
+        logging.StreamHandler(sys.stdout),
+    ],
+)
+logging.info("🔍 LG 모니터 크롤러 시작")
+
 # ────────────────────────── 1. Selenium 준비 ──────────────────────────
 def get_driver():
     service = None
     opt = webdriver.ChromeOptions()
-    opt.add_argument("--headless=new")          # CI/서버용
-    opt.add_argument("--no-sandbox")            # GitHub Actions 권장
-    opt.add_argument("--disable-dev-shm-usage") # /dev/shm 용량 문제 방지
+    opt.add_argument("--headless=new")
+    opt.add_argument("--no-sandbox")
+    opt.add_argument("--disable-dev-shm-usage")
     opt.add_argument("--window-size=1280,4000")
     opt.add_argument("--lang=de-DE")
     opt.add_argument(
@@ -52,8 +64,7 @@ def set_zip(driver, zip_code="65760"):
     """
     driver.execute_async_script(script, zip_code, payload)
     driver.refresh()
-    time.sleep(1)  # 쿠키 적용 대기
-# --------------------------------------------------------------------------
+    time.sleep(1)
 
 BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031/"  # pg=1|2
 CARD_SEL = (
@@ -66,12 +77,10 @@ def fetch_cards(page: int, driver):
     url = BASE_URL if page == 1 else f"{BASE_URL}?pg={page}"
     driver.get(url)
 
-    # 언어·통화 쿠키 강제
     driver.add_cookie({"name": "lc-main", "value": "de_DE"})
     driver.add_cookie({"name": "i18n-prefs", "value": "EUR"})
     driver.refresh()
 
-    # 스크롤: 카드 수가 더 이상 늘지 않을 때까지
     SCROLL_PAUSE = 30
     last = 0
     while True:
@@ -103,11 +112,10 @@ def pick_title(card):
 
 def pick_price(card):
     try:
-        p = card.find_element(
+        return card.find_element(
             By.XPATH,
             './/span[contains(@class,"p13n-sc-price")]',
         ).text.strip()
-        return p
     except NoSuchElementException:
         return ""
 
@@ -125,7 +133,7 @@ def money_to_float(txt: str):
     except ValueError:
         return None
 
-# ────────────────────────── 4. 전체 카드 수집 및 DataFrame ───────────────────────
+# ────────────────────────── 4. 전체 카드 수집 및 로깅 ──────────────────────────
 driver = get_driver()
 driver.get("https://www.amazon.de/")
 set_zip(driver, "65760")
@@ -133,27 +141,42 @@ set_zip(driver, "65760")
 cards = []
 for pg in (1, 2):
     cards += fetch_cards(pg, driver)
+logging.info(f"총 {len(cards)}개 카드 수집 완료")
 
-print(f"[INFO] total cards fetched after scroll: {len(cards)}")
 items = []
-for card in cards:
-    # 순위 (실패 시 해당 카드 스킵)
+for idx, card in enumerate(cards, start=1):
     try:
         rank = pick_rank(card)
     except (NoSuchElementException, ValueError):
+        logging.warning(f"[{idx}] 랭크 추출 실패 → 건너뜀")
         continue
 
     title = pick_title(card)
-    if not title or not re.search(r"\bLG\b", title, re.I):
-        continue
-
-    price_val = money_to_float(pick_price(card))
+    lg_match = bool(re.search(r"\bLG\b", title, re.I))
+    price_raw = pick_price(card)
+    price_val = money_to_float(price_raw)
 
     try:
         a = card.find_element(By.XPATH, './/a[contains(@href,"/dp/")]')
         link = "https://www.amazon.de" + a.get_attribute("href").split("?", 1)[0]
         asin = re.search(r"/dp/([A-Z0-9]{10})", link).group(1)
     except Exception:
+        logging.warning(f"[{idx}] 링크/ASIN 추출 실패 → 건너뜀")
+        continue
+
+    # 카드 전체 정보 로그
+    card_info = {
+        "rank": rank,
+        "title": title,
+        "price_text": price_raw,
+        "price": price_val,
+        "asin": asin,
+        "url": link,
+        "lg_match": lg_match,
+    }
+    logging.info(f"CARD_DATA {json.dumps(card_info, ensure_ascii=False)}")
+
+    if not lg_match:
         continue
 
     items.append(
@@ -161,21 +184,22 @@ for card in cards:
     )
 
 driver.quit()
+logging.info(f"LG 모니터 필터 후 {len(items)}개 남음")
 
+# ────────────────────────── 5. DataFrame 및 빈 결과 처리 ──────────────────────────
 cols = ["asin", "title", "url", "price", "rank"]
 df_today = pd.DataFrame(items, columns=cols)
 
 if df_today.empty:
-    print("No LG monitors found today – skipping sheet update.")
+    logging.info("LG 모니터 없음 → 시트 업데이트 생략")
     sys.exit(0)
 
 df_today = df_today.sort_values("rank").reset_index(drop=True)
 
-# ────────────────────────── 5. 날짜 컬럼 추가 ──────────────────────────
 kst = pytz.timezone("Asia/Seoul")
 df_today["date"] = datetime.datetime.now(kst).strftime("%Y-%m-%d %H:%M:%S")
 
-# ────────────────────────── 6. Google Sheet 기록 ──────────────────────────
+# ────────────────────────── 6. Google Sheet 기록 (이하 동일) ─────────────────────
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 creds = Credentials.from_service_account_info(
     json.loads(base64.b64decode(os.environ["GCP_SA_BASE64"]).decode()),
@@ -196,7 +220,6 @@ ws_today = (
     else sh.add_worksheet("Today", rows=100, cols=20)
 )
 
-# 6-A. 이전 History 불러와서 delta 계산
 try:
     prev = pd.DataFrame(ws_hist.get_all_records()).dropna()
 except gspread.exceptions.APIError:
@@ -214,11 +237,9 @@ else:
     df_today["rank_prev"] = None
     df_today["price_prev"] = None
 
-# 숫자형 변환
 for col in ["price", "price_prev", "rank_prev"]:
     df_today[col] = pd.to_numeric(df_today[col], errors="coerce")
 
-# Δ 계산
 df_today["rank_delta_num"] = df_today["rank_prev"] - df_today["rank"]
 df_today["price_delta_num"] = df_today["price"] - df_today["price_prev"]
 
@@ -254,7 +275,6 @@ ws_today.update([cols_out] + df_today.values.tolist(), value_input_option="USER_
 # 6-C. ▲/▼ 서식
 RED = Color(1, 0, 0)
 BLUE = Color(0, 0, 1)
-
 delta_cols = {"rank_delta": "G", "price_delta": "H"}
 fmt_ranges = []
 for i, row in df_today.iterrows():
@@ -269,8 +289,8 @@ for i, row in df_today.iterrows():
             fmt_ranges.append(
                 (f"{col_letter}{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=BLUE)))
             )
-
 if fmt_ranges:
     format_cell_ranges(ws_today, fmt_ranges)
 
+logging.info("Google Sheet 업데이트 완료 — LG 모니터 %d개", len(df_today))
 print("✓ Google Sheet 업데이트 완료 — LG 모니터", len(df_today))
