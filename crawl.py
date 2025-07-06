@@ -72,7 +72,10 @@ CARD_SEL = (
 )
 
 # ────────────────────────── 2. 페이지에서 카드 가져오기 ──────────────────────────
-def fetch_cards(page: int, driver):
+BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031/"
+CARD_SEL = "li.zg-no-numbers"
+
+def fetch_cards_and_parse(page: int, driver):
     url = BASE_URL if page == 1 else f"{BASE_URL}?pg={page}"
     driver.get(url)
 
@@ -90,102 +93,77 @@ def fetch_cards(page: int, driver):
             break
         last = now
 
-    return driver.find_elements(By.CSS_SELECTOR, CARD_SEL)
+    cards = driver.find_elements(By.CSS_SELECTOR, CARD_SEL)
+    parsed_items = []
 
-# ────────────────────────── 3. 카드 파싱 보조 함수 ──────────────────────────
-def pick_title(card):
-    try:
-        t = card.find_element(
-            By.XPATH,
-            './/div[contains(@class,"_cDEzb_p13n-sc-css-line-clamp-2_EWgCb")]',
-        ).text.strip()
-        if t:
-            return t
-    except NoSuchElementException:
-        pass
-    try:
-        img = card.find_element(By.XPATH, './/img[@alt]')
-        return img.get_attribute("alt").strip()
-    except NoSuchElementException:
-        return ""
+    for idx, card in enumerate(cards, start=1):
+        try:
+            rank_el = card.find_element(By.XPATH, './/span[contains(@class,"zg-bdg-text")]')
+            rank = int(re.sub(r"\\D", "", rank_el.text))
+        except (NoSuchElementException, ValueError, StaleElementReferenceException):
+            logging.warning(f"[{idx}] 랭크 추출 실패 → 건너뜀")
+            continue
 
-def pick_price(card):
-    try:
-        return card.find_element(
-            By.XPATH,
-            './/span[contains(@class,"p13n-sc-price")]',
-        ).text.strip()
-    except NoSuchElementException:
-        return ""
+        try:
+            try:
+                title = card.find_element(By.XPATH, './/div[contains(@class,"_cDEzb_p13n-sc-css-line-clamp-2_EWgCb")]').text.strip()
+            except NoSuchElementException:
+                title = card.find_element(By.XPATH, './/img[@alt]').get_attribute("alt").strip()
+        except Exception:
+            title = ""
 
-def pick_rank(card):
-    r = card.find_element(
-        By.XPATH,
-        './/span[contains(@class,"zg-bdg-text")]',
-    ).text
-    return int(re.sub(r"\D", "", r))
+        lg_match = bool(re.search(r"\\bLG\\b", title, re.I))
 
-def money_to_float(txt: str):
-    val = re.sub(r"[^\d,\.]", "", txt).replace(".", "").replace(",", ".")
-    try:
-        return float(val)
-    except ValueError:
-        return None
+        try:
+            price_raw = card.find_element(By.XPATH, './/span[contains(@class,"p13n-sc-price")]').text.strip()
+        except NoSuchElementException:
+            price_raw = ""
 
-# ────────────────────────── 4. 전체 카드 수집 및 로깅 ──────────────────────────
+        price_val = re.sub(r"[^\\d,\.]", "", price_raw).replace(".", "").replace(",", ".")
+        try:
+            price_val = float(price_val)
+        except ValueError:
+            price_val = None
+
+        try:
+            a = card.find_element(By.XPATH, './/a[contains(@href,"/dp/")]')
+            link = "https://www.amazon.de" + a.get_attribute("href").split("?", 1)[0]
+            asin = re.search(r"/dp/([A-Z0-9]{10})", link).group(1)
+        except Exception:
+            logging.warning(f"[{idx}] 링크/ASIN 추출 실패 → 건너뜀")
+            continue
+
+        card_info = {
+            "rank": rank,
+            "title": title,
+            "price_text": price_raw,
+            "price": price_val,
+            "asin": asin,
+            "url": link,
+            "lg_match": lg_match,
+        }
+        logging.info(f"CARD_DATA {json.dumps(card_info, ensure_ascii=False)}")
+
+        if lg_match:
+            parsed_items.append(
+                {"asin": asin, "title": title, "url": link, "price": price_val, "rank": rank}
+            )
+
+    return parsed_items
+
+# ────────────────────────── 3. 수집 및 파싱 ──────────────────────────
 driver = get_driver()
 driver.get("https://www.amazon.de/")
 set_zip(driver, "65760")
 
-cards = []
-for pg in (1, 2):
-    cards += fetch_cards(pg, driver)
-logging.info(f"총 {len(cards)}개 카드 수집 완료")
-
 items = []
-for idx, card in enumerate(cards, start=1):
-    try:
-        rank = pick_rank(card)
-    except (NoSuchElementException, ValueError):
-        logging.warning(f"[{idx}] 랭크 추출 실패 → 건너뜀")
-        continue
-
-    title = pick_title(card)
-    lg_match = bool(re.search(r"\bLG\b", title, re.I))
-    price_raw = pick_price(card)
-    price_val = money_to_float(price_raw)
-
-    try:
-        a = card.find_element(By.XPATH, './/a[contains(@href,"/dp/")]')
-        link = "https://www.amazon.de" + a.get_attribute("href").split("?", 1)[0]
-        asin = re.search(r"/dp/([A-Z0-9]{10})", link).group(1)
-    except Exception:
-        logging.warning(f"[{idx}] 링크/ASIN 추출 실패 → 건너뜀")
-        continue
-
-    # 카드 전체 정보 로그
-    card_info = {
-        "rank": rank,
-        "title": title,
-        "price_text": price_raw,
-        "price": price_val,
-        "asin": asin,
-        "url": link,
-        "lg_match": lg_match,
-    }
-    logging.info(f"CARD_DATA {json.dumps(card_info, ensure_ascii=False)}")
-
-    if not lg_match:
-        continue
-
-    items.append(
-        {"asin": asin, "title": title, "url": link, "price": price_val, "rank": rank}
-    )
+for pg in (1, 2):
+    items += fetch_cards_and_parse(pg, driver)
 
 driver.quit()
 logging.info(f"LG 모니터 필터 후 {len(items)}개 남음")
 
-# ────────────────────────── 5. DataFrame 및 빈 결과 처리 ──────────────────────────
+# ────────────────────────── 4. DataFrame 및 빈 결과 처리 ──────────────────────────
 cols = ["asin", "title", "url", "price", "rank"]
 df_today = pd.DataFrame(items, columns=cols)
 
@@ -198,7 +176,7 @@ df_today = df_today.sort_values("rank").reset_index(drop=True)
 kst = pytz.timezone("Asia/Seoul")
 df_today["date"] = datetime.datetime.now(kst).strftime("%Y-%m-%d %H:%M:%S")
 
-# ────────────────────────── 6. Google Sheet 기록 (이하 동일) ─────────────────────
+# ────────────────────────── 5. Google Sheet 기록 (이하 동일) ─────────────────────
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 creds = Credentials.from_service_account_info(
     json.loads(base64.b64decode(os.environ["GCP_SA_BASE64"]).decode()),
