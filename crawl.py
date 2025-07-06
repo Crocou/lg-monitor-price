@@ -99,7 +99,7 @@ def fetch_cards_and_parse(page: int, driver):
     for idx, card in enumerate(cards, start=1):
         try:
             rank_el = card.find_element(By.XPATH, './/span[contains(@class,"zg-bdg-text")]')
-            rank = int(re.sub(r"\\D", "", rank_el.text))
+            rank = int(re.sub(r"\D", "", rank_el.text))
         except (NoSuchElementException, ValueError, StaleElementReferenceException):
             logging.warning(f"[{idx}] 랭크 추출 실패 → 건너뜀")
             continue
