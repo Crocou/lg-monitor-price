@@ -68,8 +68,7 @@ def set_zip(driver, zip_code="65760"):
 
 BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031/"  # pg=1|2
 CARD_SEL = (
-    "div.zg-grid-general-unit, div.zg-grid-general-faceout, "
-    "div.p13n-sc-uncoverable-faceout"
+    "p13n-zg-list-grid-desktop_zeitgeist-lists_2"
 )
 
 # ────────────────────────── 2. 페이지에서 카드 가져오기 ──────────────────────────
