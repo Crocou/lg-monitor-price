@@ -17,7 +17,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 
 def get_driver():
     # ① Chrome 옵션
-    opt = Options()
+    opt = get_default_chrome_options()
     opt.add_argument("--headless=new")          # CI/서버용
     opt.add_argument("--no-sandbox")            # GitHub Actions 권장
     opt.add_argument("--disable-dev-shm-usage") # /dev/shm 용량 문제 방지
