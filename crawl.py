@@ -67,7 +67,7 @@ def set_zip_ui(driver, zip_code: str = "65760", timeout: int = 30):
 
     # 1) 위치 선택 버튼 클릭
     logging.info("📍 위치 설정 버튼 클릭 시도")
-    wait.until(EC.element_to_be_clickable((By.ID, "nav-global-location-slot"))).click()
+    wait.until(EC.element_to_be_clickable((By.ID, "nav-global-location-data-modal-action"))).click()
     logging.info("✅ 위치 설정 팝업 열림")
 
     # 2) 우편번호 입력
