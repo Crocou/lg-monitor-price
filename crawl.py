@@ -106,24 +106,38 @@ def money_to_float(txt: str):
 
 def fetch_cards_and_parse(page: int, driver):
     url = BASE_URL if page == 1 else f"{BASE_URL}?pg={page}"
+    logging.info(f"▶️  요청 URL (page {page}): {url}")
     driver.get(url)
 
+    # 쿠키 설정 및 새로고침
     driver.add_cookie({"name": "lc-main", "value": "de_DE"})
     driver.add_cookie({"name": "i18n-prefs", "value": "EUR"})
     driver.refresh()
 
-    SCROLL_PAUSE = 30
+    # 스크롤하면서 카드 수집 루프
+    MAX_WAIT = 60  # 최대 대기 시간 (초)
+    start_time = time.time()
+
     last = 0
     while True:
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
         time.sleep(SCROLL_PAUSE)
-        now = len(driver.find_elements(By.CSS_SELECTOR, CARD_SEL))
+
+        cards = driver.find_elements(By.CSS_SELECTOR, CARD_SEL)
+        now = len(cards)
+
+        # ⛔️ 페이지 1은 반드시 카드 50개 다 모을 때까지 대기
+        if page == 1 and now < 50:
+            if time.time() - start_time > MAX_WAIT:
+                logging.warning(f"⚠️ Page 1 — 카드 수 부족 ({now}/50) — 시간 초과")
+                break
+            continue  # 아직 50개 못 모았으면 반복
+
         if now == last:
             break
         last = now
 
-    cards = driver.find_elements(By.CSS_SELECTOR, CARD_SEL)
-    parsed_items = []
+    logging.info(f"✅ page {page} 카드 수집 완료: {now}개")
 
     for idx, card in enumerate(cards, start=1):
         # ───── 랭크 ─────
