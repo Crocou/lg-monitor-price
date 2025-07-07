@@ -49,16 +49,20 @@ def get_driver():
 
 # ★ 1-A. 우편번호를 UI로 설정 --------------------------------------
 def set_zip_ui(driver, zip_code: str = "65760", timeout: int = 30):
-    """
-    Amazon 헤더 위치 팝오버를 열어 우편번호를 설정한다.
-    실패 시 TimeoutException 을 그대로 올려서 크롤러를 중단시킨다.
-    """
     wait = WebDriverWait(driver, timeout)
-
-    # 페이지가 완전히 로드될 때까지 대기
     wait.until(lambda d: d.execute_script("return document.readyState") == "complete")
 
-    # 1) 헤더 'Lieferung nach …' 버튼 클릭
+    # ★ 1) 쿠키 배너가 있으면 먼저 닫기
+    try:
+        wait.until(EC.element_to_be_clickable((By.ID, "sp-cc-accept"))).click()
+        logging.info("Cookie banner closed")
+    except TimeoutException:
+        pass  # 배너가 없으면 그냥 진행
+
+    # ★ 2) 헤더 버튼을 뷰포트에 확실히 보이게 스크롤
+    driver.execute_script("window.scrollTo(0, 0)")
+
+    # 3) 위치 팝오버 클릭 (기존 코드 그대로)
     wait.until(EC.element_to_be_clickable(
         (By.ID, "nav-global-location-popover-link"))
     ).click()
