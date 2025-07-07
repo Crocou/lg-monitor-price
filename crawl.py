@@ -15,6 +15,7 @@ from selenium.common.exceptions import (
     StaleElementReferenceException,
     TimeoutException,
 )
+from selenium.webdriver.remote.webdriver import WebElement
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from gspread_formatting import format_cell_ranges, CellFormat, TextFormat, Color
@@ -48,10 +49,44 @@ def get_driver():
     return webdriver.Chrome(options=opt)
 
 # ★ 1-A. 우편번호를 UI로 설정 --------------------------------------
+
+def is_valid_location_button(driver, by, selector, expected_keywords=("Lieferadresse", "delivery", "location", "postcode", "ZIP")) -> bool:
+    """주어진 요소가 '위치 설정 버튼' 역할을 하는지 다각도로 검증한다."""
+    try:
+        wait = WebDriverWait(driver, 10)
+
+        # 1. 존재 + 보임
+        elem: WebElement = driver.find_element(by, selector)
+        if not elem.is_displayed():
+            logging.warning("❌ 요소는 존재하지만 화면에 보이지 않음")
+            return False
+
+        # 2. 클릭 가능 여부
+        wait.until(EC.element_to_be_clickable((by, selector)))
+
+        # 3. 의미 있는 텍스트/속성 여부
+        text = elem.text.strip()
+        aria = elem.get_attribute("aria-label") or ""
+        joined = text + " " + aria
+
+        if any(keyword.lower() in joined.lower() for keyword in expected_keywords):
+            logging.info("✅ 유효한 위치 버튼으로 판단됨 (%s)", selector)
+            return True
+        else:
+            logging.warning("❓ 텍스트/aria-label에 위치 관련 키워드 없음: %s", joined)
+            return False
+
+    except NoSuchElementException:
+        logging.warning("❌ 요소를 찾을 수 없음 (%s)", selector)
+    except TimeoutException:
+        logging.warning("❌ 요소가 클릭 가능한 상태가 아님 (%s)", selector)
+    except Exception as e:
+        logging.warning("⚠️ 예외 발생: %s", e)
+
+    return False
+
 def set_zip_ui(driver, zip_code: str = "65760", timeout: int = 30):
-    """UI 클릭 방식으로만 우편번호를 강제 설정한다.
-       후보 id 다중 시도, 실패 시 TimeoutException 그대로 throw.
-    """
+    """UI 클릭 방식으로만 우편번호를 강제 설정한다."""
     wait = WebDriverWait(driver, timeout)
     wait.until(lambda d: d.execute_script("return document.readyState") == "complete")
     logging.info("📦 페이지 로딩 완료, 우편번호 설정 시작 (%s)", zip_code)
@@ -66,19 +101,22 @@ def set_zip_ui(driver, zip_code: str = "65760", timeout: int = 30):
         logging.info("ℹ️ 쿠키 배너 없음 또는 이미 닫힘")
 
     # 1) 위치 선택 버튼 클릭
-    loc_button_ids = [
+    candidates = [
+        (By.ID, "nav-global-location-slot"),
+        (By.ID, "glow-ingress-line2"),
         (By.XPATH, "/html/body/div[1]/header/div/div[1]/div[1]/div[2]/span/a"),
     ]
+
     clicked = False
-    for loc_id in loc_button_ids:
-        try:
-            logging.info("📍 위치 선택 버튼 클릭 시도: %s", loc_id)
-            wait.until(EC.element_to_be_clickable((By.ID, loc_id))).click()
-            logging.info("✅ 위치 선택 팝업 열림 (%s)", loc_id)
-            clicked = True
-            break
-        except TimeoutException:
-            logging.warning("❌ 클릭 실패 (id=%s)", loc_id)
+    for by, selector in candidates:
+        if is_valid_location_button(driver, by, selector):
+            logging.info("➡️ 위치 버튼 클릭 시도: %s", selector)
+            try:
+                wait.until(EC.element_to_be_clickable((by, selector))).click()
+                clicked = True
+                break
+            except Exception as e:
+                logging.warning("❌ 클릭 실패: %s", e)
 
     if not clicked:
         raise TimeoutException("❌ 위치 선택 버튼 클릭 실패 (모든 후보 시도됨)")
@@ -88,22 +126,17 @@ def set_zip_ui(driver, zip_code: str = "65760", timeout: int = 30):
     input_el = wait.until(EC.presence_of_element_located((By.ID, "GLUXZipUpdateInput")))
     input_el.clear()
     input_el.send_keys(zip_code)
-    logging.info("✅ 우편번호 입력 완료")
 
-    # 3) Apply 클릭
-    logging.info("🟡 'Apply' 버튼 클릭 시도")
+    # 3) 적용 버튼 클릭
     wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="GLUXZipUpdate"]/span/input'))).click()
-    logging.info("✅ 'Apply' 버튼 클릭 완료")
 
-    # 4) 닫기 버튼 클릭
-    logging.info("🟡 'Confirm Close' 버튼 클릭 시도")
+    # 4) 팝업 닫기
     wait.until(EC.element_to_be_clickable((By.ID, "GLUXConfirmClose"))).click()
-    logging.info("✅ 위치 설정 팝업 닫힘")
 
-    # 5) 최종 확인
-    logging.info("🔍 헤더에 우편번호 반영 확인 중")
+    # 5) 반영 확인
     wait.until(lambda d: zip_code in d.find_element(By.ID, "glow-ingress-line2").text)
-    logging.info("🎯 우편번호 %s UI 방식 적용 성공", zip_code)
+    logging.info("✅ 우편번호 %s UI 방식 적용 성공", zip_code)
+
 
 
 # ─── 2. 카드 파싱 ───────────────────────────────────────────────────
