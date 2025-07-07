@@ -127,7 +127,7 @@ def fetch_cards_and_parse(page: int, driver):
         return []                # 바로 빈 리스트 반환해 다음 페이지 시도
 
     # ─── 스크롤하면서 추가 카드 로딩 ───
-    SCROLL_PAUSE = 2
+    SCROLL_PAUSE = 10
     MAX_WAIT = 60                # 스크롤 최대 대기(초) — 필요에 맞게 조정
     start = time.time()
     last = 0
