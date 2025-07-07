@@ -66,9 +66,25 @@ def set_zip_ui(driver, zip_code: str = "65760", timeout: int = 30):
         logging.info("ℹ️ 쿠키 배너 없음 또는 이미 닫힘")
 
     # 1) 위치 선택 버튼 클릭
-    logging.info("📍 위치 설정 버튼 클릭 시도")
-    wait.until(EC.element_to_be_clickable((By.ID, "nav-global-location-popover-link"))).click()
-    logging.info("✅ 위치 설정 팝업 열림") 
+    loc_button_ids = [
+        "nav-global-location-slot",
+        "nav-packard-glow-loc-icon",
+        "glow-ingress-block",
+        "glow-ingress-line2"
+    ]
+    clicked = False
+    for loc_id in loc_button_ids:
+        try:
+            logging.info("📍 위치 선택 버튼 클릭 시도: %s", loc_id)
+            wait.until(EC.element_to_be_clickable((By.ID, loc_id))).click()
+            logging.info("✅ 위치 선택 팝업 열림 (%s)", loc_id)
+            clicked = True
+            break
+        except TimeoutException:
+            logging.warning("❌ 클릭 실패 (id=%s)", loc_id)
+
+    if not clicked:
+        raise TimeoutException("❌ 위치 선택 버튼 클릭 실패 (모든 후보 시도됨)")
 
     # 2) 우편번호 입력
     logging.info("⌨️ 우편번호 입력란 찾는 중")
