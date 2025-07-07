@@ -175,7 +175,7 @@ def fetch_cards_and_parse(page: int, driver):
 
         # ───── 가격 ─────
         try:
-            price_raw = card.find_element(By.XPATH, './/span[contains(@class,"p13n-sc-price")]').text.strip()
+            price_raw = card.find_element(By.CSS_SELECTOR, 'span._cDEzb_p13n-sc-price_3mJ9Z').text.strip()
         except NoSuchElementException:
             price_raw = ""
 
