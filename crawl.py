@@ -111,14 +111,17 @@ def money_to_float(txt: str):
 def fetch_cards_and_parse(page: int, driver):
     parsed_items = []
     url = BASE_URL if page == 1 else f"{BASE_URL}?pg={page}"
-    logging.info(f"▶️  요청 URL (page {page}): {url}")
+    logging.info("▶️  요청 URL (page %d): %s", page, url)
     driver.get(url)
 
-    # ─── 배송지·통화 쿠키 세팅 후 새로고침 ───
+    # ── 배송지·통화 쿠키 ───────────────────────────────────────────
     driver.add_cookie({"name": "lc-main", "value": "de_DE"})
     driver.add_cookie({"name": "i18n-prefs", "value": "EUR"})
+    # ① 배송지 쿠키가 없으면 즉시 주입
+    if not driver.get_cookie("deliveryZip"):
+        driver.add_cookie({"name": "deliveryZip", "value": "65760"})
     driver.refresh()
-    logging.info("deliveryZip 쿠키 → %s", driver.get_cookie("deliveryZip"))
+    logging.info("쿠키 확인 → deliveryZip=%s", driver.get_cookie("deliveryZip"))
 
     # ─── ★ 최소 한 장이라도 뜰 때까지 대기 (최대 20초) ───
     try:
@@ -176,10 +179,26 @@ def fetch_cards_and_parse(page: int, driver):
         lg_match = bool(re.search(r"\bLG\b", title_norm, re.I))
 
         # ───── 가격 ─────
+        price_raw = ""
+        # ② 1순위: 카드 안의 ‘오늘 가격’
         try:
-            price_raw = card.find_element(By.CSS_SELECTOR, 'span._cDEzb_p13n-sc-price_3mJ9Z').text.strip()
+            price_raw = card.find_element(
+                By.CSS_SELECTOR, 'span._cDEzb_p13n-sc-price_3mJ9Z'
+            ).text.strip()
         except NoSuchElementException:
-            price_raw = ""
+            pass
+
+        # ③ 2순위: ‘3 offers from €123’ 형태
+        if not price_raw:
+            try:
+                offer_txt = card.find_element(
+                    By.CSS_SELECTOR, 'span.a-color-secondary'
+                ).text.strip()          # 예: "3 offers from €123.45"
+                m = re.search(r'€[\d\.,]+', offer_txt)
+                if m:
+                    price_raw = m.group(0)   # "€123.45" 추출
+            except NoSuchElementException:
+                pass
 
         price_val = money_to_float(price_raw)
 
