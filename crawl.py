@@ -54,30 +54,44 @@ def set_zip_ui(driver, zip_code: str = "65760", timeout: int = 30):
     """
     wait = WebDriverWait(driver, timeout)
     wait.until(lambda d: d.execute_script("return document.readyState") == "complete")
+    logging.info("📦 페이지 로딩 완료, 우편번호 설정 시작 (%s)", zip_code)
 
     # 0) 쿠키 배너 닫기(있을 때만)
     try:
+        logging.info("🔍 쿠키 배너 확인")
         wait.until(EC.element_to_be_clickable((By.ID, "sp-cc-accept"))).click()
         driver.execute_script("window.scrollTo(0, 0)")
+        logging.info("✅ 쿠키 배너 닫힘")
     except TimeoutException:
-        pass
+        logging.info("ℹ️ 쿠키 배너 없음 또는 이미 닫힘")
 
+    # 1) 위치 선택 버튼 클릭
+    logging.info("📍 위치 설정 버튼 클릭 시도")
     wait.until(EC.element_to_be_clickable((By.ID, "nav-global-location-slot"))).click()
+    logging.info("✅ 위치 설정 팝업 열림")
 
     # 2) 우편번호 입력
+    logging.info("⌨️ 우편번호 입력란 찾는 중")
     input_el = wait.until(EC.presence_of_element_located((By.ID, "GLUXZipUpdateInput")))
     input_el.clear()
     input_el.send_keys(zip_code)
+    logging.info("✅ 우편번호 입력 완료")
 
-    # 3) Apply → 팝업 닫기
-    wait.until(EC.element_to_be_clickable(
-        (By.XPATH, '//*[@id="GLUXZipUpdate"]/span/input'))
-    ).click()
+    # 3) Apply 클릭
+    logging.info("🟡 'Apply' 버튼 클릭 시도")
+    wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="GLUXZipUpdate"]/span/input'))).click()
+    logging.info("✅ 'Apply' 버튼 클릭 완료")
+
+    # 4) 닫기 버튼 클릭
+    logging.info("🟡 'Confirm Close' 버튼 클릭 시도")
     wait.until(EC.element_to_be_clickable((By.ID, "GLUXConfirmClose"))).click()
+    logging.info("✅ 위치 설정 팝업 닫힘")
 
-    # 4) 헤더 반영 확인
+    # 5) 최종 확인
+    logging.info("🔍 헤더에 우편번호 반영 확인 중")
     wait.until(lambda d: zip_code in d.find_element(By.ID, "glow-ingress-line2").text)
-    logging.info("✅ 우편번호 %s UI 방식 적용 성공", zip_code)
+    logging.info("🎯 우편번호 %s UI 방식 적용 성공", zip_code)
+
 
 # ─── 2. 카드 파싱 ───────────────────────────────────────────────────
 def fetch_cards_and_parse(page: int, driver):
