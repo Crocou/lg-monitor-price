@@ -67,10 +67,7 @@ def set_zip_ui(driver, zip_code: str = "65760", timeout: int = 30):
 
     # 1) 위치 선택 버튼 클릭
     loc_button_ids = [
-        "nav-global-location-slot",
-        "nav-packard-glow-loc-icon",
-        "glow-ingress-block",
-        "glow-ingress-line2"
+        (By.XPATH, "/html/body/div[1]/header/div/div[1]/div[1]/div[2]/span/a"),
     ]
     clicked = False
     for loc_id in loc_button_ids:
