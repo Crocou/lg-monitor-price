@@ -48,36 +48,43 @@ def get_driver():
     return webdriver.Chrome(options=opt)
 
 # ★ 1-A. 우편번호를 UI로 설정 --------------------------------------
-def set_zip_ui(driver, zip_code: str = "65760", timeout: int = 15):
+def set_zip_ui(driver, zip_code: str = "65760", timeout: int = 30):
+    """
+    Amazon 헤더 위치 팝오버를 열어 우편번호를 설정한다.
+    실패 시 TimeoutException 을 그대로 올려서 크롤러를 중단시킨다.
+    """
     wait = WebDriverWait(driver, timeout)
 
-    # 팝오버 열기
+    # 페이지가 완전히 로드될 때까지 대기
+    wait.until(lambda d: d.execute_script("return document.readyState") == "complete")
+
+    # 1) 헤더 'Lieferung nach …' 버튼 클릭
     wait.until(EC.element_to_be_clickable(
-        (By.XPATH, '//*[@id="nav-global-location-popover-link"]'))
+        (By.ID, "nav-global-location-popover-link"))
     ).click()
 
-    # 우편번호 입력
+    # 2) 우편번호 입력창
     input_el = wait.until(EC.presence_of_element_located(
-        (By.XPATH, '//*[@id="GLUXZipUpdateInput"]'))
+        (By.ID, "GLUXZipUpdateInput"))
     )
     input_el.clear()
     input_el.send_keys(zip_code)
 
-    # Apply 버튼
+    # 3) Apply 버튼
     wait.until(EC.element_to_be_clickable(
         (By.XPATH, '//*[@id="GLUXZipUpdate"]/span/input'))
     ).click()
 
-    # 팝오버 닫기
+    # 4) 팝오버 닫기
     wait.until(EC.element_to_be_clickable(
-        (By.XPATH, '//*[@id="GLUXConfirmClose"]'))
+        (By.ID, "GLUXConfirmClose"))
     ).click()
 
-    # 헤더에 우편번호 반영되었는지 확인
+    # 5) 헤더에 우편번호 반영 확인
     wait.until(lambda d: zip_code in d.find_element(
-        By.XPATH, '//*[@id="glow-ingress-line2"]').text)
+        By.ID, "glow-ingress-line2").text)
 
-    logging.info("우편번호 %s 적용 완료", zip_code)
+    logging.info("✅ UI 방식으로 우편번호 %s 적용 완료", zip_code)
 
 # ─── 2. 카드 파싱 ───────────────────────────────────────────────────
 def fetch_cards_and_parse(page: int, driver):
