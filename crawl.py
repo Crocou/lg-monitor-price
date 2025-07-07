@@ -69,6 +69,7 @@ def set_zip(driver, zip_code="65760"):
     driver.execute_async_script(script, zip_code, payload)
     driver.refresh()
     time.sleep(1)
+    driver.add_cookie({"name": "deliveryZip", "value": zip_code})
 
 BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031/"  # pg=1|2
 CARD_SEL = (
@@ -117,6 +118,7 @@ def fetch_cards_and_parse(page: int, driver):
     driver.add_cookie({"name": "lc-main", "value": "de_DE"})
     driver.add_cookie({"name": "i18n-prefs", "value": "EUR"})
     driver.refresh()
+    logging.info("deliveryZip 쿠키 → %s", driver.get_cookie("deliveryZip"))
 
     # ─── ★ 최소 한 장이라도 뜰 때까지 대기 (최대 20초) ───
     try:
