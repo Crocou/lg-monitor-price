@@ -12,6 +12,10 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import NoSuchElementException
 from gspread_formatting import format_cell_ranges, CellFormat, TextFormat, Color
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException
+
 
 # ─── 0. 로깅 설정 ──────────────────────────────────────────────────
 logging.basicConfig(
@@ -103,22 +107,29 @@ def money_to_float(txt: str):
         logging.warning(f"가격 변환 실패: {txt}")
         return None
 
-
 def fetch_cards_and_parse(page: int, driver):
     url = BASE_URL if page == 1 else f"{BASE_URL}?pg={page}"
     logging.info(f"▶️  요청 URL (page {page}): {url}")
     driver.get(url)
 
-    # 쿠키 설정 및 새로고침
+    # ─── 배송지·통화 쿠키 세팅 후 새로고침 ───
     driver.add_cookie({"name": "lc-main", "value": "de_DE"})
     driver.add_cookie({"name": "i18n-prefs", "value": "EUR"})
     driver.refresh()
 
-    # 스크롤하면서 카드 수집 루프 
-    SCROLL_PAUSE = 5
-    MAX_WAIT = 60  # 최대 대기 시간 (초)
-    start_time = time.time()
+    # ─── ★ 최소 한 장이라도 뜰 때까지 대기 (최대 20초) ───
+    try:
+        WebDriverWait(driver, 20).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, CARD_SEL))
+        )
+    except TimeoutException:
+        logging.error(f"⛔ page {page}: 카드가 한 장도 안 뜸 — 타임아웃")
+        return []                # 바로 빈 리스트 반환해 다음 페이지 시도
 
+    # ─── 스크롤하면서 추가 카드 로딩 ───
+    SCROLL_PAUSE = 2
+    MAX_WAIT = 60                # 스크롤 최대 대기(초) — 필요에 맞게 조정
+    start = time.time()
     last = 0
     while True:
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
@@ -127,18 +138,16 @@ def fetch_cards_and_parse(page: int, driver):
         cards = driver.find_elements(By.CSS_SELECTOR, CARD_SEL)
         now = len(cards)
 
-        # ⛔️ 페이지 1은 반드시 카드 50개 다 모을 때까지 대기
-        if page == 1 and now < 50:
-            if time.time() - start_time > MAX_WAIT:
-                logging.warning(f"⚠️ Page 1 — 카드 수 부족 ({now}/50) — 시간 초과")
-                break
-            continue  # 아직 50개 못 모았으면 반복
+        # page 1이라면 50개 꽉 찰 때까지 시도 (필요 없으면 조건 삭제)
+        if page == 1 and now < 50 and time.time() - start < MAX_WAIT:
+            continue
 
-        if now == last:
+        if now == last or time.time() - start >= MAX_WAIT:
             break
         last = now
 
-    logging.info(f"✅ page {page} 카드 수집 완료: {now}개")
+    logging.info(f"✅ page {page} 카드 수집 완료: {len(cards)}개")
+
 
     for idx, card in enumerate(cards, start=1):
         # ───── 랭크 ─────
