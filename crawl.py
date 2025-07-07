@@ -49,46 +49,51 @@ def get_driver():
 
 # ★ 1-A. 우편번호를 UI로 설정 --------------------------------------
 def set_zip_ui(driver, zip_code: str = "65760", timeout: int = 30):
+    """UI 클릭 방식으로만 우편번호를 강제 설정한다.
+       후보 id 다중 시도, 실패 시 TimeoutException 그대로 throw.
+    """
     wait = WebDriverWait(driver, timeout)
     wait.until(lambda d: d.execute_script("return document.readyState") == "complete")
 
-    # ★ 1) 쿠키 배너가 있으면 먼저 닫기
+    # 0) 쿠키 배너 닫기(있을 때만)
     try:
         wait.until(EC.element_to_be_clickable((By.ID, "sp-cc-accept"))).click()
-        logging.info("Cookie banner closed")
+        driver.execute_script("window.scrollTo(0, 0)")
     except TimeoutException:
-        pass  # 배너가 없으면 그냥 진행
+        pass
 
-    # ★ 2) 헤더 버튼을 뷰포트에 확실히 보이게 스크롤
-    driver.execute_script("window.scrollTo(0, 0)")
+    # 1) 위치 버튼 찾기 — 여러 id 후보
+    btn = None
+    for btn_id in [
+        "nav-global-location-popover-link",          # 기존
+        "nav-global-location-popover-link-navx",     # 새 A/B 패턴
+        "nav-global-location-data-modal-action",     # 다른 레이아웃
+    ]:
+        try:
+            btn = driver.find_element(By.ID, btn_id)
+            break
+        except NoSuchElementException:
+            continue
 
-    # 3) 위치 팝오버 클릭 (기존 코드 그대로)
-    wait.until(EC.element_to_be_clickable(
-        (By.ID, "nav-global-location-popover-link"))
-    ).click()
+    if btn is None:
+        raise TimeoutException("헤더 위치 버튼 id 변형으로 찾지 못함")
 
-    # 2) 우편번호 입력창
-    input_el = wait.until(EC.presence_of_element_located(
-        (By.ID, "GLUXZipUpdateInput"))
-    )
+    wait.until(EC.element_to_be_clickable(btn)).click()
+
+    # 2) 우편번호 입력
+    input_el = wait.until(EC.presence_of_element_located((By.ID, "GLUXZipUpdateInput")))
     input_el.clear()
     input_el.send_keys(zip_code)
 
-    # 3) Apply 버튼
+    # 3) Apply → 팝업 닫기
     wait.until(EC.element_to_be_clickable(
         (By.XPATH, '//*[@id="GLUXZipUpdate"]/span/input'))
     ).click()
+    wait.until(EC.element_to_be_clickable((By.ID, "GLUXConfirmClose"))).click()
 
-    # 4) 팝오버 닫기
-    wait.until(EC.element_to_be_clickable(
-        (By.ID, "GLUXConfirmClose"))
-    ).click()
-
-    # 5) 헤더에 우편번호 반영 확인
-    wait.until(lambda d: zip_code in d.find_element(
-        By.ID, "glow-ingress-line2").text)
-
-    logging.info("✅ UI 방식으로 우편번호 %s 적용 완료", zip_code)
+    # 4) 헤더 반영 확인
+    wait.until(lambda d: zip_code in d.find_element(By.ID, "glow-ingress-line2").text)
+    logging.info("✅ 우편번호 %s UI 방식 적용 성공", zip_code)
 
 # ─── 2. 카드 파싱 ───────────────────────────────────────────────────
 def fetch_cards_and_parse(page: int, driver):
