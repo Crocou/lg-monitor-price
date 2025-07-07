@@ -80,34 +80,6 @@ CARD_SEL = (
 BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031/"
 CARD_SEL = "li.zg-no-numbers"
 
-
-def money_to_float(txt: str):
-    """'€196,79' 또는 '€196.79' → 196.79 (float)"""
-    if not txt:
-        return None
-    # NBSP·좁은공백 제거
-    txt = txt.replace("\u00a0", "").replace("\u202f", "")
-    # 통화·문자 제거
-    txt_clean = re.sub(r"[^\d,\.]", "", txt)
-
-    # 소수 구분자 감지
-    if "," in txt_clean and "." in txt_clean:
-        # 마지막 구분자를 소수점으로 간주
-        if txt_clean.rfind(",") > txt_clean.rfind("."):
-            txt_clean = txt_clean.replace(".", "").replace(",", ".")
-        else:
-            txt_clean = txt_clean.replace(",", "")
-    elif "," in txt_clean and "." not in txt_clean:
-        txt_clean = txt_clean.replace(",", ".")
-    else:
-        txt_clean = txt_clean  # 이미 '.'만 있거나 구분자 없음
-
-    try:
-        return float(txt_clean)
-    except ValueError:
-        logging.warning(f"가격 변환 실패: {txt}")
-        return None
-
 def fetch_cards_and_parse(page: int, driver):
     parsed_items = []
     url = BASE_URL if page == 1 else f"{BASE_URL}?pg={page}"
@@ -179,28 +151,22 @@ def fetch_cards_and_parse(page: int, driver):
         lg_match = bool(re.search(r"\bLG\b", title_norm, re.I))
 
         # ───── 가격 ─────
-        price_raw = ""
-        # ② 1순위: 카드 안의 ‘오늘 가격’
-        try:
-            price_raw = card.find_element(
-                By.CSS_SELECTOR, 'span._cDEzb_p13n-sc-price_3mJ9Z'
-            ).text.strip()
-        except NoSuchElementException:
-            pass
-
-        # ③ 2순위: ‘3 offers from €123’ 형태
-        if not price_raw:
+        # ① 1순위: ‘오늘 가격’ 스팬 ― 없으면 바로 NoSuchElementException → 크롤링 중단
+        price_raw = card.find_element(
+            By.CSS_SELECTOR, 'span._cDEzb_p13n-sc-price_3mJ9Z'
+        ).text.strip()           # 예: "€99.99"  (빈 문자열일 수도 있음)
+        
+        # ② 2순위: 스팬은 있지만 텍스트가 비어 있을 때만 ‘offers’ 문구에서 추출
+        if not price_raw:        # 1순위가 ''이면 fallback
             try:
                 offer_txt = card.find_element(
                     By.CSS_SELECTOR, 'span.a-color-secondary'
-                ).text.strip()          # 예: "3 offers from €123.45"
+                ).text.strip()    # 예: "3 offers from €123.45"
                 m = re.search(r'€[\d\.,]+', offer_txt)
                 if m:
-                    price_raw = m.group(0)   # "€123.45" 추출
+                    price_raw = m.group(0)   # "€123.45"
             except NoSuchElementException:
                 pass
-
-        price_val = money_to_float(price_raw)
 
         # ───── 링크/ASIN ─────
         try:
@@ -217,7 +183,7 @@ def fetch_cards_and_parse(page: int, driver):
             "rank": rank,
             "title": title,
             "price_text": price_raw,
-            "price": price_val,
+            "price": price_raw,
             "asin": asin,
             "url": link,
             "lg_match": lg_match,
@@ -229,7 +195,7 @@ def fetch_cards_and_parse(page: int, driver):
                 "asin": asin,
                 "title": title,
                 "url": link,
-                "price": price_val,
+                "price": price,
                 "rank": rank,
             })
 
