@@ -62,23 +62,7 @@ def set_zip_ui(driver, zip_code: str = "65760", timeout: int = 30):
     except TimeoutException:
         pass
 
-    # 1) 위치 버튼 찾기 — 여러 id 후보
-    btn = None
-    for btn_id in [
-        "nav-global-location-popover-link",          # 기존
-        "nav-global-location-popover-link-navx",     # 새 A/B 패턴
-        "nav-global-location-data-modal-action",     # 다른 레이아웃
-    ]:
-        try:
-            btn = driver.find_element(By.ID, btn_id)
-            break
-        except NoSuchElementException:
-            continue
-
-    if btn is None:
-        raise TimeoutException("헤더 위치 버튼 id 변형으로 찾지 못함")
-
-    wait.until(EC.element_to_be_clickable(btn)).click()
+    wait.until(EC.element_to_be_clickable((By.ID, "nav-global-location-slot"))).click()
 
     # 2) 우편번호 입력
     input_el = wait.until(EC.presence_of_element_located((By.ID, "GLUXZipUpdateInput")))
