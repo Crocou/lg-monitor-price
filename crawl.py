@@ -114,7 +114,8 @@ def fetch_cards_and_parse(page: int, driver):
     driver.add_cookie({"name": "i18n-prefs", "value": "EUR"})
     driver.refresh()
 
-    # 스크롤하면서 카드 수집 루프
+    # 스크롤하면서 카드 수집 루프 
+    SCROLL_PAUSE = 5
     MAX_WAIT = 60  # 최대 대기 시간 (초)
     start_time = time.time()
 
