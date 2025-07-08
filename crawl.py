@@ -48,18 +48,22 @@ def fetch_cards_and_parse(page: int, driver):
     logging.info("▶️  요청 URL (page %d): %s", page, url)
     driver.get(url)
 
-    # 최소 1장 대기
-    try:
-        WebDriverWait(driver, 20).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, CARD_SEL))
-        )
-    except TimeoutException:
-        logging.error("⛔ page %d: 카드 0개 - 타임아웃", page)
-        return []
-
-    # 스크롤 로딩
+    # ─── 최대 30초 동안 카드가 하나라도 뜰 때까지 1초 간격 확인 ───
+    MAX_WAIT = 30
     start = time.time()
-    last, SCROLL_PAUSE, MAX_WAIT = 0, 3, 60
+    while True:
+        cards = driver.find_elements(By.CSS_SELECTOR, CARD_SEL)
+        if cards:
+            logging.info("✅ page %d: 첫 카드 발견", page)
+            break
+        if time.time() - start > MAX_WAIT:
+            logging.error("⛔ page %d: 카드가 여전히 없음 - 강제 종료", page)
+            return []
+        time.sleep(1)
+
+    # ─── 스크롤 로딩 ─────────────────────────────────────────────────
+    start = time.time()
+    last, SCROLL_PAUSE = 0, 3
     while True:
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
         time.sleep(SCROLL_PAUSE)
