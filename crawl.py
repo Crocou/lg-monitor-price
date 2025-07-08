@@ -40,7 +40,7 @@ def get_driver():
     )
     return webdriver.Chrome(options=opt)
 
-# ─── 카드 파싱 함수 ─────────────────────────────────────────────────
+# ─── 카드 파싱 함수 (스크롤 + 파싱) ────────────────────────────────────────────
 def fetch_cards_and_parse(page: int, driver):
     parsed_items = []
 
@@ -48,42 +48,36 @@ def fetch_cards_and_parse(page: int, driver):
     logging.info("▶️  요청 URL (page %d): %s", page, url)
     driver.get(url)
 
-    # ─── 최대 30초 동안 카드가 하나라도 뜰 때까지 1초 간격 확인 ───
-    MAX_WAIT = 30
-    start = time.time()
-    while True:
-        cards = driver.find_elements(By.CSS_SELECTOR, CARD_SEL)
-        if cards:
-            logging.info("✅ page %d: 첫 카드 발견", page)
-            break
-        if time.time() - start > MAX_WAIT:
-            logging.error("⛔ page %d: 카드가 여전히 없음 - 강제 종료", page)
-            return []
-        time.sleep(1)
-
-    # ─── 스크롤 로딩 ─────────────────────────────────────────────────
-    start = time.time()
-    last, SCROLL_PAUSE = 0, 3
+    # ─── 2) 스크롤 : 새로운 카드가 더 이상 늘어나지 않을 때까지 ──────────
+    SCROLL_PAUSE = 30
+    last_count = 0
     while True:
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
         time.sleep(SCROLL_PAUSE)
-        now = len(driver.find_elements(By.CSS_SELECTOR, CARD_SEL))
-        if page == 1 and now < 50 and time.time() - start < MAX_WAIT:
-            continue
-        if now == last or time.time() - start >= MAX_WAIT:
+
+        cards_now = driver.find_elements(By.CSS_SELECTOR, CARD_SEL)
+        now = len(cards_now)
+        logging.info("   스크롤 후 카드 수: %d", now)
+
+        if now == last_count:   # 더 이상 추가 로딩 없으면 종료
             break
-        last = now
+        last_count = now
 
     cards = driver.find_elements(By.CSS_SELECTOR, CARD_SEL)
-    logging.info("✅ page %d 카드 %d개", page, len(cards))
+    logging.info("✅ page %d 카드 로딩 완료: %d개", page, len(cards))
 
-    for idx, card in enumerate(cards, 1):
+    # ─── 3) 각 카드 파싱 ────────────────────────────────────────────────
+    for idx, card in enumerate(cards, start=1):
+        # 랭크
         try:
-            rank = int(re.sub(r"\D", "", card.find_element(
-                By.XPATH, './/span[contains(@class,"zg-bdg-text")]').text))
+            rank = int(re.sub(r"\D", "",
+                card.find_element(By.XPATH, './/span[contains(@class,"zg-bdg-text")]')
+                    .text
+            ))
         except (NoSuchElementException, ValueError, StaleElementReferenceException):
             continue
 
+        # 제목
         try:
             title = card.find_element(
                 By.XPATH, './/div[contains(@class,"_cDEzb_p13n-sc-css-line-clamp-2_EWgCb")]'
@@ -91,41 +85,51 @@ def fetch_cards_and_parse(page: int, driver):
         except NoSuchElementException:
             title = card.find_element(By.XPATH, './/img[@alt]').get_attribute("alt").strip()
 
-        lg_match = bool(re.search(r"\bLG\b", title.replace("\u00a0", " "), re.I))
+        # LG 필터
+        if not re.search(r"\bLG\b", title.replace("\u00a0", " "), re.I):
+            continue
 
-        # 가격 추출 (스트립 문자열 그대로)
-        price_raw = card.find_element(
-            By.CSS_SELECTOR, 'span._cDEzb_p13n-sc-price_3mJ9Z'
-        ).text.strip()
+        # 가격 (스트립문자열 그대로)
+        try:
+            price_raw = card.find_element(
+                By.CSS_SELECTOR, 'span._cDEzb_p13n-sc-price_3mJ9Z'
+            ).text.strip()
+        except NoSuchElementException:
+            price_raw = ""
         if not price_raw:
             try:
                 offer_txt = card.find_element(
                     By.CSS_SELECTOR, 'span.a-color-secondary'
                 ).text.strip()
                 m = re.search(r'€[\d\.,]+', offer_txt)
-                if m:
-                    price_raw = m.group(0)
+                price_raw = m.group(0) if m else ""
             except NoSuchElementException:
-                pass
+                price_raw = ""
+
+        if not price_raw:
+            logging.warning(f"[{idx}] 가격 정보 없음, 건너뜀")
+            continue
 
         # 링크/ASIN
         try:
-            href = card.find_element(By.XPATH, './/a[contains(@href,"/dp/")]').get_attribute("href")
+            href = card.find_element(
+                By.XPATH, './/a[contains(@href,"/dp/")]'
+            ).get_attribute("href")
             link = href.split("?",1)[0]
             asin = re.search(r"/dp/([A-Z0-9]{10})", link).group(1)
         except Exception:
             continue
 
-        if lg_match:
-            parsed_items.append({
-                "asin": asin,
-                "title": title,
-                "url": link,
-                "price": price_raw,
-                "rank": rank,
-            })
+        parsed_items.append({
+            "asin":  asin,
+            "title": title,
+            "url":   link,
+            "price": price_raw,
+            "rank":  rank,
+        })
 
     return parsed_items
+
 
 # ───  크롤러 실행 ─────────────────────────────────────────────────
 driver = get_driver()
