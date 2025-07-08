@@ -1,11 +1,4 @@
-# crawl_scroll_zip65760.py
-"""
-Amazon.de 베스트셀러 ▸ Monitors 1~100위
-- LG 모니터 필터, 가격·순위·변동 기록 (스크롤 포함)
-- ★ 배송지(우편번호) 65760 고정 (UI 클릭 방식)
-"""
-
-import sys, os, re, json, base64, datetime, time, logging
+import os, sys, re, json, datetime, time, logging
 import pandas as pd, gspread, pytz
 from google.oauth2.service_account import Credentials
 from selenium import webdriver
@@ -15,16 +8,15 @@ from selenium.common.exceptions import (
     StaleElementReferenceException,
     TimeoutException,
 )
-from selenium.webdriver.remote.webdriver import WebElement
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from gspread_formatting import format_cell_ranges, CellFormat, TextFormat, Color
 
 # ─── 설정 상수 ──────────────────────────────────────────────────────
-BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031/"
-CARD_SEL = "li.zg-no-numbers"
+BASE_URL  = "https://www.amazon.de/gp/bestsellers/computers/429868031/"
+CARD_SEL  = "li.zg-no-numbers"
 
-# ─── 0. 로깅 ────────────────────────────────────────────────────────
+# ─── 로깅 ──────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -33,7 +25,7 @@ logging.basicConfig(
 )
 logging.info("🔍 LG 모니터 크롤러 시작")
 
-# ─── 1. Selenium ───────────────────────────────────────────────────
+# ─── Selenium 드라이버 생성 ─────────────────────────────────────────
 def get_driver():
     opt = webdriver.ChromeOptions()
     opt.add_argument("--headless=new")
@@ -48,98 +40,7 @@ def get_driver():
     )
     return webdriver.Chrome(options=opt)
 
-# ★ 1-A. 우편번호를 UI로 설정 --------------------------------------
-
-def is_valid_location_button(driver, by, selector, expected_keywords=("Lieferadresse", "delivery", "location", "postcode", "ZIP")) -> bool:
-    """주어진 요소가 '위치 설정 버튼' 역할을 하는지 다각도로 검증한다."""
-    try:
-        wait = WebDriverWait(driver, 10)
-
-        # 1. 존재 + 보임
-        elem: WebElement = driver.find_element(by, selector)
-        if not elem.is_displayed():
-            logging.warning("❌ 요소는 존재하지만 화면에 보이지 않음")
-            return False
-
-        # 2. 클릭 가능 여부
-        wait.until(EC.element_to_be_clickable((by, selector)))
-
-        # 3. 의미 있는 텍스트/속성 여부
-        text = elem.text.strip()
-        aria = elem.get_attribute("aria-label") or ""
-        joined = text + " " + aria
-
-        if any(keyword.lower() in joined.lower() for keyword in expected_keywords):
-            logging.info("✅ 유효한 위치 버튼으로 판단됨 (%s)", selector)
-            return True
-        else:
-            logging.warning("❓ 텍스트/aria-label에 위치 관련 키워드 없음: %s", joined)
-            return False
-
-    except NoSuchElementException:
-        logging.warning("❌ 요소를 찾을 수 없음 (%s)", selector)
-    except TimeoutException:
-        logging.warning("❌ 요소가 클릭 가능한 상태가 아님 (%s)", selector)
-    except Exception as e:
-        logging.warning("⚠️ 예외 발생: %s", e)
-
-    return False
-
-def set_zip_ui(driver, zip_code: str = "65760", timeout: int = 30):
-    """UI 클릭 방식으로만 우편번호를 강제 설정한다."""
-    wait = WebDriverWait(driver, timeout)
-    wait.until(lambda d: d.execute_script("return document.readyState") == "complete")
-    logging.info("📦 페이지 로딩 완료, 우편번호 설정 시작 (%s)", zip_code)
-
-    # 0) 쿠키 배너 닫기(있을 때만)
-    try:
-        logging.info("🔍 쿠키 배너 확인")
-        wait.until(EC.element_to_be_clickable((By.ID, "sp-cc-accept"))).click()
-        driver.execute_script("window.scrollTo(0, 0)")
-        logging.info("✅ 쿠키 배너 닫힘")
-    except TimeoutException:
-        logging.info("ℹ️ 쿠키 배너 없음 또는 이미 닫힘")
-
-    # 1) 위치 선택 버튼 클릭
-    candidates = [
-        (By.ID, "nav-global-location-slot"),
-        (By.ID, "glow-ingress-line2"),
-        (By.XPATH, "/html/body/div[1]/header/div/div[1]/div[1]/div[2]/span/a"),
-    ]
-
-    clicked = False
-    for by, selector in candidates:
-        if is_valid_location_button(driver, by, selector):
-            logging.info("➡️ 위치 버튼 클릭 시도: %s", selector)
-            try:
-                wait.until(EC.element_to_be_clickable((by, selector))).click()
-                clicked = True
-                break
-            except Exception as e:
-                logging.warning("❌ 클릭 실패: %s", e)
-
-    if not clicked:
-        raise TimeoutException("❌ 위치 선택 버튼 클릭 실패 (모든 후보 시도됨)")
-
-    # 2) 우편번호 입력
-    logging.info("⌨️ 우편번호 입력란 찾는 중")
-    input_el = wait.until(EC.presence_of_element_located((By.ID, "GLUXZipUpdateInput")))
-    input_el.clear()
-    input_el.send_keys(zip_code)
-
-    # 3) 적용 버튼 클릭
-    wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="GLUXZipUpdate"]/span/input'))).click()
-
-    # 4) 팝업 닫기
-    wait.until(EC.element_to_be_clickable((By.ID, "GLUXConfirmClose"))).click()
-
-    # 5) 반영 확인
-    wait.until(lambda d: zip_code in d.find_element(By.ID, "glow-ingress-line2").text)
-    logging.info("✅ 우편번호 %s UI 방식 적용 성공", zip_code)
-
-
-
-# ─── 2. 카드 파싱 ───────────────────────────────────────────────────
+# ─── 카드 파싱 함수 ─────────────────────────────────────────────────
 def fetch_cards_and_parse(page: int, driver):
     parsed_items = []
 
@@ -147,7 +48,7 @@ def fetch_cards_and_parse(page: int, driver):
     logging.info("▶️  요청 URL (page %d): %s", page, url)
     driver.get(url)
 
-    # 최소 한 장이라도 렌더 대기
+    # 최소 1장 대기
     try:
         WebDriverWait(driver, 20).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, CARD_SEL))
@@ -172,7 +73,6 @@ def fetch_cards_and_parse(page: int, driver):
     cards = driver.find_elements(By.CSS_SELECTOR, CARD_SEL)
     logging.info("✅ page %d 카드 %d개", page, len(cards))
 
-    # 카드 루프
     for idx, card in enumerate(cards, 1):
         try:
             rank = int(re.sub(r"\D", "", card.find_element(
@@ -189,25 +89,25 @@ def fetch_cards_and_parse(page: int, driver):
 
         lg_match = bool(re.search(r"\bLG\b", title.replace("\u00a0", " "), re.I))
 
-        # ─── 가격 ───
+        # 가격 추출 (스트립 문자열 그대로)
         price_raw = card.find_element(
             By.CSS_SELECTOR, 'span._cDEzb_p13n-sc-price_3mJ9Z'
-        ).text.strip()                         # 없으면 예외 발생 → 크롤링 중단
-
-        if not price_raw:                      # 빈 문자열이면 offers 문구
+        ).text.strip()
+        if not price_raw:
             try:
                 offer_txt = card.find_element(
-                    By.CSS_SELECTOR, 'span.a-color-secondary').text.strip()
+                    By.CSS_SELECTOR, 'span.a-color-secondary'
+                ).text.strip()
                 m = re.search(r'€[\d\.,]+', offer_txt)
                 if m:
                     price_raw = m.group(0)
             except NoSuchElementException:
                 pass
 
-        # ─── 링크/ASIN ───
+        # 링크/ASIN
         try:
             href = card.find_element(By.XPATH, './/a[contains(@href,"/dp/")]').get_attribute("href")
-            link = href.split("?", 1)[0] if href.startswith("http") else "https://www.amazon.de" + href.split("?", 1)[0]
+            link = href.split("?",1)[0]
             asin = re.search(r"/dp/([A-Z0-9]{10})", link).group(1)
         except Exception:
             continue
@@ -217,26 +117,39 @@ def fetch_cards_and_parse(page: int, driver):
                 "asin": asin,
                 "title": title,
                 "url": link,
-                "price": price_raw,   # ★ strip 결과 그대로 저장
+                "price": price_raw,
                 "rank": rank,
             })
 
     return parsed_items
 
-# ─── 3. 크롤링 실행 ────────────────────────────────────────────────
+# ───  크롤러 실행 ─────────────────────────────────────────────────
 driver = get_driver()
 try:
-    driver.get("https://www.amazon.de/")
-    set_zip_ui(driver, "65760")          # ★ UI 방식 우편번호 설정
+    # --- 1) 로그인 페이지 이동 ---
+    driver.get("https://www.amazon.de/ap/signin")
+    wait = WebDriverWait(driver, 20)
 
+    # --- 2) 아이디 입력 & 다음 ---
+    amz_user = os.environ["AMZ_USER"]
+    amz_pass = os.environ["AMZ_PASS"]
+    wait.until(EC.presence_of_element_located((By.ID, "ap_email"))).send_keys(amz_user)
+    wait.until(EC.element_to_be_clickable((By.ID, "continue"))).click()
+
+    # --- 3) 비밀번호 입력 & 로그인 ---
+    wait.until(EC.presence_of_element_located((By.ID, "ap_password"))).send_keys(amz_pass)
+    wait.until(EC.element_to_be_clickable((By.ID, "signInSubmit"))).click()
+    logging.info("🔐 로그인 완료 (%s)", amz_user)
+
+    # --- 4) 베스트셀러 페이지로 이동 후 크롤링 ---
     items = []
     for pg in (1, 2):
         items += fetch_cards_and_parse(pg, driver)
+
 finally:
     driver.quit()
 
 logging.info("LG 모니터 필터 후 %d개 남음", len(items))
-
 # ─── 4. DataFrame & Google Sheet (가격은 문자열 그대로) ─────────────
 cols = ["asin", "title", "url", "price", "rank"]
 df_today = pd.DataFrame(items, columns=cols)
