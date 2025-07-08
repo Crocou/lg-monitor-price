@@ -63,7 +63,7 @@ def fetch_cards_and_parse(page: int, driver):
     logging.info(f"✅ page {page} 카드 수집 완료: {len(cards)}개")
 
     for idx, card in enumerate(cards, start=1):
-        # 랭크
+        # 랭크 추출
         try:
             rank = int(re.sub(r"\D", "", card.find_element(
                 By.XPATH, './/span[contains(@class,"zg-bdg-text")]'
@@ -72,7 +72,7 @@ def fetch_cards_and_parse(page: int, driver):
             logging.warning(f"[{idx}] 랭크 추출 실패 → 건너뜀")
             continue
 
-        # 제목
+        # 제목 추출
         try:
             title = card.find_element(
                 By.XPATH, './/div[contains(@class,"_cDEzb_p13n-sc-css-line-clamp-2_EWgCb")]'
@@ -175,16 +175,17 @@ ws_today = (
     else sh.add_worksheet("Today", rows=100, cols=20)
 )
 
-# 히스토리 시트 업데이트
+# 히스토리 시트 업데이트 (헤더 삽입)
 if not ws_hist.get_all_values():
     ws_hist.append_row(cols + ["date"], value_input_option="USER_ENTERED")
+
 prev = pd.DataFrame(ws_hist.get_all_records()).dropna()
-if not prev.empty and {"asin","rank","price","date"} <= set(prev.columns):
+if not prev.empty and {"asin", "rank", "price", "date"} <= set(prev.columns):
     latest = (
         prev.sort_values("date")
             .groupby("asin", as_index=False)
-            .last()[["asin","rank","price"]]
-            .rename(columns={"rank":"rank_prev","price":"price_prev"})
+            .last()[["asin", "rank", "price"]]
+            .rename(columns={"rank": "rank_prev", "price": "price_prev"})
     )
     df_today = df_today.merge(latest, on="asin", how="left")
 else:
@@ -192,7 +193,7 @@ else:
     df_today["price_prev"] = None
 
 # 수치 변환 및 델타
-for col in ["price","price_prev","rank_prev"]:
+for col in ["price", "price_prev", "rank_prev"]:
     df_today[col] = pd.to_numeric(df_today[col], errors="coerce")
 df_today["rank_delta_num"] = df_today["rank_prev"] - df_today["rank"]
 df_today["price_delta_num"] = df_today["price"] - df_today["price_prev"]
@@ -206,29 +207,33 @@ def fmt(val, is_price=False):
 df_today["rank_delta"] = df_today["rank_delta_num"].apply(fmt)
 df_today["price_delta"] = df_today["price_delta_num"].apply(lambda x: fmt(x, True))
 
-# Today 시트 및 포맷 업데이트
-cols_out = ["asin","title","rank","price","url","date","rank_delta","price_delta"]
-if not ws_hist.get_all_values():  # 헤더 삽입
-    ws_hist.append_row(cols_out, value_input_option="USER_ENTERED")
-ws_hist.append_rows(df_today[cols_out].values.tolist(), value_input_option="USER_ENTERED")
+# ────────────────────────── 5. Google Sheets 업데이트 ────────────────────────
+cols_out = ["asin", "title", "rank", "price", "url", "date", "rank_delta", "price_delta"]
+df_to_write = df_today[cols_out].fillna("")
 
+# 히스토리 시트에 데이터 추가
+ws_hist.append_rows(df_to_write.values.tolist(), value_input_option="USER_ENTERED")
+
+# Today 시트에 데이터 쓰기
 ws_today.clear()
-ws_today.update([cols_out] + df_today[cols_out].values.tolist(), value_input_option="USER_ENTERED")
+ws_today.update([cols_out] + df_to_write.values.tolist(), value_input_option="USER_ENTERED")
 
-# 델타 컬럼 서식
-RED = Color(1,0,0)
-BLUE = Color(0,0,1)
+# 델타 컬럼 서식 지정
+RED = Color(1, 0, 0)
+BLUE = Color(0, 0, 1)
 fmt_ranges = []
-for i, row in df_today.iterrows():
+for i, row in df_to_write.iterrows():
     r = i + 2
-    for col_name, col_letter in {"rank_delta":"G","price_delta":"H"}.items():
-        val = row[col_name]
-        if isinstance(val,str) and val.startswith("▲"):
-            fmt_ranges.append((f"{col_letter}{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=RED))))
-        elif isinstance(val,str) and val.startswith("▼"):
-            fmt_ranges.append((f"{col_letter}{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=BLUE))))
+    if row["rank_delta"].startswith("▲"):
+        fmt_ranges.append((f"G{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=RED))))
+    elif row["rank_delta"].startswith("▼"):
+        fmt_ranges.append((f"G{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=BLUE))))
+    if row["price_delta"].startswith("▲"):
+        fmt_ranges.append((f"H{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=RED))))
+    elif row["price_delta"].startswith("▼"):
+        fmt_ranges.append((f"H{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=BLUE))))
 if fmt_ranges:
     format_cell_ranges(ws_today, fmt_ranges)
 
-logging.info(f"Google Sheet 업데이트 완료 — LG 모니터 {len(df_today)}개")
-print(f"✓ Google Sheet 업데이트 완료 — LG 모니터 {len(df_today)}개")
+logging.info(f"Google Sheet 업데이트 완료 — LG 모니터 {len(df_to_write)}개")
+print(f"✓ Google Sheet 업데이트 완료 — LG 모니터 {len(df_to_write)}개")
