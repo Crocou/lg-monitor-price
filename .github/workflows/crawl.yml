@@ -23,4 +23,6 @@ jobs:
         env:
           SHEET_ID:        ${{ secrets.SHEET_ID }}
           GCP_SA_BASE64:   ${{ secrets.GCP_SA_BASE64 }}
+          AMZ_USER:        ${{ secrets.AMZ_USER }}
+          AMZ_PASS:        ${{ secrets.AMZ_PASS }}
         run: python crawl.py
