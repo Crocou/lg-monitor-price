@@ -42,34 +42,41 @@ CARD_SEL = "li.zg-no-numbers"
 def fetch_cards_and_parse(page: int, driver):
     parsed_items = []
     url = BASE_URL if page == 1 else f"{BASE_URL}?pg={page}"
-    logging.info(f"▶️  요청 URL (page {page}): {url}")
+    logging.info(f"▶️  페이지 {page} 크롤링 시작 - URL: {url}")
     driver.get(url)
 
     # ─── 스크롤하면서 추가 카드 로딩 (최대 대기 60초) ───
     SCROLL_PAUSE = 10
     MAX_WAIT = 60
     start = time.time()
-    last = 0
+    last_count = 0
+    iteration = 0
     while True:
+        iteration += 1
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
         time.sleep(SCROLL_PAUSE)
         cards = driver.find_elements(By.CSS_SELECTOR, CARD_SEL)
         now = len(cards)
-        if page == 1 and now < 50 and time.time() - start < MAX_WAIT:
+        elapsed = int(time.time() - start)
+        logging.info(f"   [스크롤 {iteration}] 로딩된 카드: {now}개, 경과 시간: {elapsed}초")
+        if page == 1 and now < 50 and elapsed < MAX_WAIT:
             continue
-        if now == last or time.time() - start >= MAX_WAIT:
+        if now == last_count or elapsed >= MAX_WAIT:
             break
-        last = now
-    logging.info(f"✅ page {page} 카드 수집 완료: {len(cards)}개")
+        last_count = now
+    logging.info(f"✅ 페이지 {page} 카드 수집 완료: {last_count or now}개 (총 경과 {elapsed}초)")
 
     for idx, card in enumerate(cards, start=1):
+        logging.info(f"  ▶ 카드 [{idx}] 파싱 시작")
         # 랭크 추출
         try:
-            rank = int(re.sub(r"\D", "", card.find_element(
+            rank_text = card.find_element(
                 By.XPATH, './/span[contains(@class,"zg-bdg-text")]'
-            ).text.strip()))
-        except (NoSuchElementException, ValueError, StaleElementReferenceException):
-            logging.warning(f"[{idx}] 랭크 추출 실패 → 건너뜀")
+            ).text.strip()
+            rank = int(re.sub(r"\D", "", rank_text))
+            logging.info(f"    랭크: {rank_text} -> {rank}")
+        except (NoSuchElementException, ValueError, StaleElementReferenceException) as e:
+            logging.warning(f"    [{idx}] 랭크 추출 실패: {e}")
             continue
 
         # 제목 추출
@@ -79,10 +86,12 @@ def fetch_cards_and_parse(page: int, driver):
             ).text.strip()
         except NoSuchElementException:
             title = card.find_element(By.XPATH, './/img[@alt]').get_attribute("alt").strip()
+        logging.info(f"    제목: {title}")
 
         # LG 필터
         title_norm = title.replace("\u00a0", " ").replace("\u202f", " ")
         if not re.search(r"\bLG\b", title_norm, re.I):
+            logging.info(f"    LG 모니터 아님 - 스킵: {title}")
             continue
 
         # 가격 (문자열 그대로)
@@ -92,6 +101,7 @@ def fetch_cards_and_parse(page: int, driver):
             ).text.strip()
         except NoSuchElementException:
             price = ""
+        logging.info(f"    가격: '{price}'")
 
         # 링크 & ASIN
         try:
@@ -100,8 +110,9 @@ def fetch_cards_and_parse(page: int, driver):
             ).get_attribute("href")
             link = href.split("?", 1)[0]
             asin = re.search(r"/dp/([A-Z0-9]{10})", link).group(1)
-        except Exception:
-            logging.warning(f"[{idx}] 링크/ASIN 추출 실패 → 건너뜀")
+            logging.info(f"    링크: {link}, ASIN: {asin}")
+        except Exception as e:
+            logging.warning(f"    [{idx}] 링크/ASIN 추출 실패: {e}")
             continue
 
         parsed_items.append({
@@ -111,6 +122,7 @@ def fetch_cards_and_parse(page: int, driver):
             "price": price,
             "rank": rank,
         })
+        logging.info(f"  ✔ 카드 [{idx}] 성공적으로 파싱 및 추가: {{'asin': asin, 'rank': rank, 'price': price}}")
 
     return parsed_items
 
@@ -138,25 +150,30 @@ try:
         try:
             items += fetch_cards_and_parse(pg, driver)
         except TimeoutException:
-            logging.error(f"⛔ page {pg}: 카드 로딩 타임아웃")
+            logging.error(f"⛔ 페이지 {pg} 카드 로딩 타임아웃 발생")
 finally:
     driver.quit()
+    logging.info("🛑 WebDriver 종료")
 
-logging.info(f"LG 모니터 필터 후 {len(items)}개 남음")
+logging.info(f"총 파싱된 LG 모니터 개수: {len(items)}개")
 
 # ────────────────────────── 4. DataFrame 생성 및 후처리 ──────────────────────────
 cols = ["asin", "title", "url", "price", "rank"]
 df_today = pd.DataFrame(items, columns=cols)
+logging.info(f"DataFrame 생성: {df_today.shape[0]}행, {df_today.shape[1]}열")
 
 if df_today.empty:
     logging.info("LG 모니터 없음 → 시트 업데이트 생략")
     sys.exit(0)
 
+# 정렬 및 날짜 추가
+logging.info("DataFrame 정렬 및 날짜 컬럼 추가")
 df_today = df_today.sort_values("rank").reset_index(drop=True)
 kst = pytz.timezone("Asia/Seoul")
 df_today["date"] = datetime.datetime.now(kst).strftime("%Y-%m-%d %H:%M:%S")
 
-# 이전 데이터 병합 및 델타 계산
+# ────────────────────────── 5. Google Sheets 업데이트 ────────────────────────
+logging.info("Google Sheets 인증 및 시트 선택")
 creds = Credentials.from_service_account_info(
     json.loads(base64.b64decode(os.environ["GCP_SA_BASE64"]).decode()),
     scopes=["https://www.googleapis.com/auth/spreadsheets"],
@@ -165,75 +182,24 @@ gc = gspread.authorize(creds)
 sh = gc.open_by_key(os.environ["SHEET_ID"])
 
 ws_hist = (
-    sh.worksheet("History")
-    if "History" in [w.title for w in sh.worksheets()]
+    sh.worksheet("History") if "History" in [w.title for w in sh.worksheets()]
     else sh.add_worksheet("History", rows=2000, cols=20)
 )
 ws_today = (
-    sh.worksheet("Today")
-    if "Today" in [w.title for w in sh.worksheets()]
+    sh.worksheet("Today") if "Today" in [w.title for w in sh.worksheets()]
     else sh.add_worksheet("Today", rows=100, cols=20)
 )
 
-# 히스토리 시트 업데이트 (헤더 삽입)
-if not ws_hist.get_all_values():
-    ws_hist.append_row(cols + ["date"], value_input_option="USER_ENTERED")
+cols_out = ["asin", "title", "rank", "price", "url", "date"]
+logging.info(f"시트에 기록할 컬럼: {cols_out}")
 
-prev = pd.DataFrame(ws_hist.get_all_records()).dropna()
-if not prev.empty and {"asin", "rank", "price", "date"} <= set(prev.columns):
-    latest = (
-        prev.sort_values("date")
-            .groupby("asin", as_index=False)
-            .last()[["asin", "rank", "price"]]
-            .rename(columns={"rank": "rank_prev", "price": "price_prev"})
-    )
-    df_today = df_today.merge(latest, on="asin", how="left")
-else:
-    df_today["rank_prev"] = None
-    df_today["price_prev"] = None
-
-# 수치 변환 및 델타
-for col in ["price", "price_prev", "rank_prev"]:
-    df_today[col] = pd.to_numeric(df_today[col], errors="coerce")
-df_today["rank_delta_num"] = df_today["rank_prev"] - df_today["rank"]
-df_today["price_delta_num"] = df_today["price"] - df_today["price_prev"]
-
-def fmt(val, is_price=False):
-    if pd.isna(val) or val == 0:
-        return "-"
-    arrow = "▲" if val > 0 else "▼"
-    return f"{arrow}{abs(val):.2f}" if is_price else f"{arrow}{abs(int(val))}"
-
-df_today["rank_delta"] = df_today["rank_delta_num"].apply(fmt)
-df_today["price_delta"] = df_today["price_delta_num"].apply(lambda x: fmt(x, True))
-
-# ────────────────────────── 5. Google Sheets 업데이트 ────────────────────────
-cols_out = ["asin", "title", "rank", "price", "url", "date", "rank_delta", "price_delta"]
 df_to_write = df_today[cols_out].fillna("")
 
-# 히스토리 시트에 데이터 추가
+logging.info("History 시트에 데이터 추가")
 ws_hist.append_rows(df_to_write.values.tolist(), value_input_option="USER_ENTERED")
-
-# Today 시트에 데이터 쓰기
+logging.info("Today 시트 초기화 및 데이터 쓰기")
 ws_today.clear()
 ws_today.update([cols_out] + df_to_write.values.tolist(), value_input_option="USER_ENTERED")
 
-# 델타 컬럼 서식 지정
-RED = Color(1, 0, 0)
-BLUE = Color(0, 0, 1)
-fmt_ranges = []
-for i, row in df_to_write.iterrows():
-    r = i + 2
-    if row["rank_delta"].startswith("▲"):
-        fmt_ranges.append((f"G{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=RED))))
-    elif row["rank_delta"].startswith("▼"):
-        fmt_ranges.append((f"G{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=BLUE))))
-    if row["price_delta"].startswith("▲"):
-        fmt_ranges.append((f"H{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=RED))))
-    elif row["price_delta"].startswith("▼"):
-        fmt_ranges.append((f"H{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=BLUE))))
-if fmt_ranges:
-    format_cell_ranges(ws_today, fmt_ranges)
-
-logging.info(f"Google Sheet 업데이트 완료 — LG 모니터 {len(df_to_write)}개")
+logging.info("Google Sheets 업데이트 완료")
 print(f"✓ Google Sheet 업데이트 완료 — LG 모니터 {len(df_to_write)}개")
