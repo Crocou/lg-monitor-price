@@ -117,15 +117,17 @@ def fetch_cards_and_parse(page: int, driver):
 # ────────────────────────── 3. 크롤러 실행 & 로그인 ─────────────────────────
 driver = get_driver()
 try:
-    # 1) Amazon 로그인
-    driver.get(
-        "https://www.amazon.de/-/en/ap/signin?openid.pape.max_auth_age=0&openid.return_to=https%3A%2F%2Fwww.amazon.de%2Fref%3Dnav_signin"
-    )
+    # --- 1) 로그인 페이지 이동 ---
+    driver.get("https://www.amazon.de/-/en/ap/signin?openid.pape.max_auth_age=0&openid.return_to=https%3A%2F%2Fwww.amazon.de%2Fref%3Dnav_signin&openid.identity=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.assoc_handle=deflex&openid.mode=checkid_setup&openid.claimed_id=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0")
     wait = WebDriverWait(driver, 20)
+
+    # --- 2) 아이디 입력 & 다음 ---
     amz_user = os.environ["AMZ_USER"]
     amz_pass = os.environ["AMZ_PASS"]
     wait.until(EC.presence_of_element_located((By.ID, "ap_email"))).send_keys(amz_user)
     wait.until(EC.element_to_be_clickable((By.ID, "continue"))).click()
+
+    # --- 3) 비밀번호 입력 & 로그인 ---
     wait.until(EC.presence_of_element_located((By.ID, "ap_password"))).send_keys(amz_pass)
     wait.until(EC.element_to_be_clickable((By.ID, "signInSubmit"))).click()
     logging.info("🔐 로그인 완료 (%s)", amz_user)
