@@ -127,7 +127,7 @@ def fetch_cards_and_parse(page: int, driver):
 driver = get_driver()
 try:
     # --- 1) 로그인 페이지 이동 ---
-    driver.get("https://www.amazon.de/ap/signin")
+    driver.get("https://www.amazon.de/-/en/ap/signin?openid.pape.max_auth_age=0&openid.return_to=https%3A%2F%2Fwww.amazon.de%2Fref%3Dnav_signin&openid.identity=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.assoc_handle=deflex&openid.mode=checkid_setup&openid.claimed_id=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0")
     wait = WebDriverWait(driver, 20)
 
     # --- 2) 아이디 입력 & 다음 ---
