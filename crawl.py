@@ -2,7 +2,7 @@
 """
 Amazon.de 베스트셀러 ▸ Monitors 1~100위
 - LG 모니터 필터, 가격·순위·변동 기록 (스크롤 포함)
-- ★ 로그인 적용 (우편번호 설정 제거)
+- ★ 로그인 적용 (계정 기본 주소 사용, 우편번호 설정 제거)
 - 동적 클래스 대신 DOM 구조·텍스트 기반 안정적 셀렉터 적용
 """
 
@@ -11,7 +11,7 @@ import pandas as pd, gspread, pytz
 from google.oauth2.service_account import Credentials
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException, TimeoutException
+from selenium.webdriver.common.exceptions import NoSuchElementException, StaleElementReferenceException, TimeoutException
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from gspread_formatting import format_cell_ranges, CellFormat, TextFormat, Color
@@ -81,7 +81,6 @@ def fetch_cards_and_parse(page: int, driver):
     logging.info(f"✅ page {page} 카드 수집 완료: {len(cards)}개")
 
     for idx, card in enumerate(cards, start=1):
-        # 랭크 추출
         try:
             rank_el = card.find_element(By.XPATH, './/span[contains(text(), "#")]')
             rank = int(re.sub(r"\D", "", rank_el.text.strip()))
@@ -89,7 +88,6 @@ def fetch_cards_and_parse(page: int, driver):
             logging.warning(f"[{idx}] 랭크 추출 실패 → 건너뜀")
             continue
 
-        # 제목 추출
         try:
             title = card.find_element(
                 By.XPATH,
@@ -103,7 +101,6 @@ def fetch_cards_and_parse(page: int, driver):
         title = title.replace("\u00a0", " ").replace("\u202f", " ")
         lg_match = bool(re.search(r"\bLG\b", title, re.I))
 
-        # 가격 추출
         try:
             price_raw = ""
             selectors = [
@@ -127,7 +124,6 @@ def fetch_cards_and_parse(page: int, driver):
             logging.warning(f"[{idx}] 가격 추출 실패 → 빈 문자열로 대체")
             price_raw = ""
 
-        # 링크·ASIN 추출
         try:
             link_el = card.find_element(By.XPATH, './/a[contains(@href,"/dp/")]')
             href = link_el.get_attribute("href").split("?",1)[0]
@@ -158,7 +154,12 @@ try:
     wait.until(EC.element_to_be_clickable((By.ID, "signInSubmit"))).click()
     logging.info("🔐 로그인 완료 (%s)", amz_user)
 
-    # 2) 페이지별 크롤링
+    # 2) 계정에 등록된 기본 배송지 적용
+    driver.get("https://www.amazon.de/")
+    time.sleep(2)
+    logging.info("🏠 기본 배송지 적용 완료")
+
+    # 3) 페이지별 크롤링
     items = []
     for pg in (1, 2):
         try:
@@ -181,7 +182,6 @@ df = df.sort_values("rank").reset_index(drop=True)
 kst = pytz.timezone("Asia/Seoul")
 df["date"] = datetime.datetime.now(kst).strftime("%Y-%m-%d %H:%M:%S")
 
-# Google Sheet 접속
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 creds = Credentials.from_service_account_info(
     json.loads(base64.b64decode(os.environ["GCP_SA_BASE64"]).decode()),
@@ -190,11 +190,9 @@ creds = Credentials.from_service_account_info(
 gc = gspread.authorize(creds)
 sh = gc.open_by_key(os.environ["SHEET_ID"])
 
-# History, Today 시트 준비
 ws_hist = sh.worksheet("History") if "History" in [w.title for w in sh.worksheets()] else sh.add_worksheet("History", 2000, 20)
 ws_today = sh.worksheet("Today")   if "Today"   in [w.title for w in sh.worksheets()] else sh.add_worksheet("Today",   100, 20)
 
-# 이전 기록 불러오기
 try:
     prev = pd.DataFrame(ws_hist.get_all_records()).dropna()
 except:
@@ -208,8 +206,7 @@ else:
     df["rank_prev"] = None
     df["price_prev"] = None
 
-# 변동 계산
-import pandas as pd  # ensure pandas imported
+import pandas as pd
 
 df["rank_delta"]  = df["rank_prev"].combine(df["rank"], lambda prev,curr: "-" if pd.isna(prev) else f"{'▲' if prev>curr else '▼'}{abs(int(prev-curr))}")
 df["price_delta"] = "-"
@@ -217,14 +214,12 @@ df["price_delta"] = "-"
 out_cols = ["asin","title","rank","price","url","date","rank_delta","price_delta"]
 df_out   = df[out_cols].fillna("")
 
-# 시트에 기록
 if not ws_hist.get_all_values():
     ws_hist.append_row(out_cols, value_input_option="USER_ENTERED")
 ws_hist.append_rows(df_out.values.tolist(), value_input_option="USER_ENTERED")
 ws_today.clear()
 ws_today.update([out_cols] + df_out.values.tolist(), value_input_option="USER_ENTERED")
 
-# 서식 적용
 RED, BLUE = Color(1,0,0), Color(0,0,1)
 fmt_ranges = []
 for i, row in df_out.iterrows():
