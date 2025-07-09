@@ -35,6 +35,8 @@ def get_driver():
     )
     return webdriver.Chrome(service=service, options=opt)
 
+BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031/"
+
 # ────────────────────────── 2. 카드 크롤링 & 파싱 ──────────────────────────
 def fetch_cards_and_parse(page: int, driver):
     parsed_items = []
