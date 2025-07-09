@@ -11,7 +11,7 @@ import pandas as pd, gspread, pytz
 from google.oauth2.service_account import Credentials
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.exceptions import NoSuchElementException, StaleElementReferenceException, TimeoutException
+from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException, TimeoutException
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from gspread_formatting import format_cell_ranges, CellFormat, TextFormat, Color
@@ -178,59 +178,3 @@ if df.empty:
     logging.info("LG 모니터 없음 → 업데이트 생략")
     sys.exit(0)
 
-df = df.sort_values("rank").reset_index(drop=True)
-kst = pytz.timezone("Asia/Seoul")
-df["date"] = datetime.datetime.now(kst).strftime("%Y-%m-%d %H:%M:%S")
-
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-creds = Credentials.from_service_account_info(
-    json.loads(base64.b64decode(os.environ["GCP_SA_BASE64"]).decode()),
-    scopes=SCOPES
-)
-gc = gspread.authorize(creds)
-sh = gc.open_by_key(os.environ["SHEET_ID"])
-
-ws_hist = sh.worksheet("History") if "History" in [w.title for w in sh.worksheets()] else sh.add_worksheet("History", 2000, 20)
-ws_today = sh.worksheet("Today")   if "Today"   in [w.title for w in sh.worksheets()] else sh.add_worksheet("Today",   100, 20)
-
-try:
-    prev = pd.DataFrame(ws_hist.get_all_records()).dropna()
-except:
-    prev = pd.DataFrame()
-
-if not prev.empty and {"asin","rank","price","date"} <= set(prev.columns):
-    last = prev.sort_values("date").groupby("asin", as_index=False).last()[["asin","rank","price"]]
-    last.columns = ["asin","rank_prev","price_prev"]
-    df = df.merge(last, on="asin", how="left")
-else:
-    df["rank_prev"] = None
-    df["price_prev"] = None
-
-import pandas as pd
-
-df["rank_delta"]  = df["rank_prev"].combine(df["rank"], lambda prev,curr: "-" if pd.isna(prev) else f"{'▲' if prev>curr else '▼'}{abs(int(prev-curr))}")
-df["price_delta"] = "-"
-
-out_cols = ["asin","title","rank","price","url","date","rank_delta","price_delta"]
-df_out   = df[out_cols].fillna("")
-
-if not ws_hist.get_all_values():
-    ws_hist.append_row(out_cols, value_input_option="USER_ENTERED")
-ws_hist.append_rows(df_out.values.tolist(), value_input_option="USER_ENTERED")
-ws_today.clear()
-ws_today.update([out_cols] + df_out.values.tolist(), value_input_option="USER_ENTERED")
-
-RED, BLUE = Color(1,0,0), Color(0,0,1)
-fmt_ranges = []
-for i, row in df_out.iterrows():
-    r = i + 2
-    for col, letter in [("rank_delta","G"),("price_delta","H")]:
-        v = row[col]
-        if v.startswith("▲"):
-            fmt_ranges.append((f"{letter}{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=RED))))
-        elif v.startswith("▼"):
-            fmt_ranges.append((f"{letter}{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=BLUE))))
-if fmt_ranges:
-    format_cell_ranges(ws_today, fmt_ranges)
-
-logging.info("Google Sheet 업데이트 완료 — LG 모니터 %d개", len(df_out))
