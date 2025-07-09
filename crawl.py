@@ -178,8 +178,8 @@ def fetch_cards_and_parse(page: int, driver):
             price_raw = card.find_element(By.CSS_SELECTOR, 'span._cDEzb_p13n-sc-price_3mJ9Z').text.strip()
         except NoSuchElementException:
             price_raw = ""
-
-        price_val = money_to_float(price_raw)
+    
+        price_val = price_raw
 
         # ───── 링크/ASIN ─────
         try:
