@@ -62,7 +62,7 @@ def set_zip(driver, zip_code="65760"):
 
 # ────────────────────────── 2. 상수 정의 ──────────────────────────
 BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031/"
-CARDS_XPATH = "//ol[@id='zg-ordered-list']/li"
+CARDS_XPATH = "//div[contains(@class,'a-cardui') and contains(@class,'_cDEzb_card')]//ol/li"
 
 def fetch_cards_and_parse(page: int, driver):
     parsed_items = []
