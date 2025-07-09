@@ -3,6 +3,7 @@
 Amazon.de 베스트셀러 ▸ Monitors 1~100위
 - LG 모니터 필터, 가격·순위·변동 기록 (스크롤 포함)
 - ★ 배송지(우편번호) 65760 고정
+- 동적 클래스 대신 DOM 구조·텍스트 기반 안정적 셀렉터 적용
 """
 
 import sys, os, re, json, base64, datetime, time, logging
@@ -28,39 +29,32 @@ logging.info("🔍 LG 모니터 크롤러 시작")
 
 # ────────────────────────── 1. Selenium 준비 ──────────────────────────
 def get_driver():
-    opt = webdriver.ChromeOptions()
-    opt.add_argument("--headless=new")
-    opt.add_argument("--no-sandbox")
-    opt.add_argument("--disable-dev-shm-usage")
-    opt.add_argument("--window-size=1280,4000")
-    opt.add_argument("--lang=de-DE")
-    opt.add_argument(
+    opts = webdriver.ChromeOptions()
+    opts.add_argument("--headless=new")
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--window-size=1280,4000")
+    opts.add_argument("--lang=de-DE")
+    opts.add_argument(
         "user-agent=Mozilla/5.0 (X11; Linux x86_64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/126.0 Safari/537.36"
     )
-    return webdriver.Chrome(options=opt)
+    return webdriver.Chrome(options=opts)
 
-# ★ 1-A. 우편번호 고정 함수 --------------------------------------------------------
+# ★ 1-A. 우편번호 고정 함수 — AJAX 호출 후 새로고침
 def set_zip(driver, zip_code="65760"):
     payload = (
         f"locationType=LOCATION_INPUT&zipCode={zip_code}"
         "&storeContext=computers&deviceType=web&pageType=Detail&actionSource=glow"
     )
     script = """
-        const zip = arguments[0];
-        const body = arguments[1];
-        const done = arguments[2];
+        const zip = arguments[0], body = arguments[1], done = arguments[2];
         fetch("https://www.amazon.de/gp/delivery/ajax/address-change.html", {
             method: "POST",
-            headers: {
-                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-                "X-Requested-With": "XMLHttpRequest"
-            },
-            body: body
-        })
-        .then(() => done())
-        .catch(() => done());
+            headers: {"Content-Type":"application/x-www-form-urlencoded; charset=UTF-8"},
+            body
+        }).then(()=>done()).catch(()=>done());
     """
     driver.execute_async_script(script, zip_code, payload)
     driver.refresh()
@@ -68,75 +62,52 @@ def set_zip(driver, zip_code="65760"):
 
 # ────────────────────────── 2. 상수 정의 ──────────────────────────
 BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031/"
-# 변경된 카드 컨테이너 셀렉터
-CARD_SEL = "div.zg-grid-general-faceout"
-
-def money_to_float(txt: str):
-    """'€196,79' 또는 '€196.79' → 196.79 (float)"""
-    if not txt:
-        return None
-    txt = txt.replace("\u00a0", "").replace("\u202f", "")
-    txt_clean = re.sub(r"[^\d,\.]", "", txt)
-    if "," in txt_clean and "." in txt_clean:
-        if txt_clean.rfind(",") > txt_clean.rfind("."):
-            txt_clean = txt_clean.replace(".", "").replace(",", ".")
-        else:
-            txt_clean = txt_clean.replace(",", "")
-    elif "," in txt_clean and "." not in txt_clean:
-        txt_clean = txt_clean.replace(",", ".")
-    try:
-        return float(txt_clean)
-    except ValueError:
-        logging.warning(f"가격 변환 실패: {txt}")
-        return None
+CARDS_XPATH = "//ol[@id='zg-ordered-list']/li"
 
 def fetch_cards_and_parse(page: int, driver):
     parsed_items = []
     url = BASE_URL if page == 1 else f"{BASE_URL}?pg={page}"
-    logging.info(f"▶️  요청 URL (page {page}): {url}")
+    logging.info(f"▶️ 요청 URL (page {page}): {url}")
     driver.get(url)
 
-    # 배송지·통화 쿠키 세팅 후 새로고침
-    driver.add_cookie({"name": "lc-main", "value": "de_DE"})
+    # 배송지·통화 쿠키 세팅
+    driver.add_cookie({"name": "lc-main",    "value": "de_DE"})
     driver.add_cookie({"name": "i18n-prefs", "value": "EUR"})
     driver.refresh()
 
+    # 최소 하나라도 로드될 때까지 대기
     try:
         WebDriverWait(driver, 20).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, CARD_SEL))
+            EC.presence_of_element_located((By.XPATH, CARDS_XPATH))
         )
     except TimeoutException:
-        logging.error(f"⛔ page {page}: 카드가 한 장도 안 뜸 — 타임아웃")
+        logging.error(f"⛔ page {page}: 카드 없음 — 타임아웃")
         return []
 
-    # 스크롤하면서 추가 카드 로딩
-    SCROLL_PAUSE = 10
-    MAX_WAIT = 60
-    start = time.time()
-    last = 0
+    # 스크롤하며 추가 로드
+    start, last_count = time.time(), 0
     while True:
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(SCROLL_PAUSE)
-        cards = driver.find_elements(By.CSS_SELECTOR, CARD_SEL)
-        now = len(cards)
-        if page == 1 and now < 50 and time.time() - start < MAX_WAIT:
+        time.sleep(5)
+        cards = driver.find_elements(By.XPATH, CARDS_XPATH)
+        curr = len(cards)
+        if (page == 1 and curr < 50 and time.time() - start < 60) or (curr != last_count and time.time() - start < 60):
+            last_count = curr
             continue
-        if now == last or time.time() - start >= MAX_WAIT:
-            break
-        last = now
+        break
 
     logging.info(f"✅ page {page} 카드 수집 완료: {len(cards)}개")
 
     for idx, card in enumerate(cards, start=1):
-        # 랭크
+        # ───── 랭크 (# 포함 텍스트) ─────
         try:
-            rank_el = card.find_element(By.XPATH, './/span[contains(@class,"zg-bdg-text")]')
+            rank_el = card.find_element(By.XPATH, './/span[contains(text(), "#")]')
             rank = int(re.sub(r"\D", "", rank_el.text.strip()))
         except Exception:
             logging.warning(f"[{idx}] 랭크 추출 실패 → 건너뜀")
             continue
 
-        # 제목
+        # ───── 제목 (alt 속성 백업 포함) ─────
         try:
             title = card.find_element(
                 By.XPATH,
@@ -150,53 +121,65 @@ def fetch_cards_and_parse(page: int, driver):
         title_norm = title.replace("\u00a0", " ").replace("\u202f", " ")
         lg_match = bool(re.search(r"\bLG\b", title_norm, re.I))
 
-        # 가격(raw)
+        # ───── 가격 (€ 통화 기호 포함된 것만) ─────
         try:
-            price_raw = card.find_element(
-                By.CSS_SELECTOR, 
-                "span.a-price > span.a-offscreen"
-            ).text.strip()
-        except NoSuchElementException:
-            price_raw = card.find_element(
-                By.CSS_SELECTOR,
-                "span.p13n-sc-price"
-            ).text.strip()
+            price_selectors = [
+                ('xpath', './/span[@class="a-offscreen"]'),
+                ('css',   'span.a-price > span.a-offscreen'),
+                ('xpath', './/*[contains(@class, "price")]'),
+                ('css',   'span.p13n-sc-price'),
+            ]
+            price_raw = ""
+            for method, sel in price_selectors:
+                try:
+                    txt = (card.find_element(By.XPATH, sel).text if method=='xpath'
+                           else card.find_element(By.CSS_SELECTOR, sel).text).strip()
+                    if '€' in txt:
+                        price_raw = txt
+                        break
+                except NoSuchElementException:
+                    continue
+            if not price_raw:
+                raise NoSuchElementException("유효한 가격 요소 없음")
+        except Exception:
+            logging.warning(f"[{idx}] 가격 추출 실패 → 빈 문자열로 대체")
+            price_raw = ""
+
         price_val = price_raw  # float 변환 없이 raw 문자열 그대로
 
-        # 링크·ASIN
+        # ───── 링크·ASIN ─────
         try:
-            a = card.find_element(By.XPATH, './/a[contains(@href,"/dp/")]')
-            href = a.get_attribute("href")
-            link = href.split("?", 1)[0]
-            asin = re.search(r"/dp/([A-Z0-9]{10})", link).group(1)
+            link_el = card.find_element(By.XPATH, './/a[contains(@href,"/dp/")]')
+            href = link_el.get_attribute("href").split("?",1)[0]
+            asin = re.search(r"/dp/([A-Z0-9]{10})", href).group(1)
         except Exception:
             logging.warning(f"[{idx}] 링크/ASIN 추출 실패 → 건너뜀")
             continue
 
-        # 로깅
-        card_info = {
+        # ───── 로깅 및 수집 ─────
+        info = {
             "rank": rank,
             "title": title,
             "price_text": price_raw,
             "price": price_val,
             "asin": asin,
-            "url": link,
+            "url": href,
             "lg_match": lg_match,
         }
-        logging.info(f"CARD_DATA {json.dumps(card_info, ensure_ascii=False)}")
+        logging.info(f"CARD_DATA {json.dumps(info, ensure_ascii=False)}")
 
         if lg_match:
             parsed_items.append({
-                "asin": asin,
+                "asin":  asin,
                 "title": title,
-                "url": link,
+                "url":   href,
                 "price": price_val,
-                "rank": rank,
+                "rank":  rank,
             })
 
     return parsed_items
 
-# ────────────────────────── 3. 수집 및 파싱 ──────────────────────────
+# ────────────────────────── 3. 수집 및 파싱 실행 ──────────────────────────
 driver = get_driver()
 driver.get("https://www.amazon.de/")
 set_zip(driver, "65760")
@@ -208,96 +191,67 @@ for pg in (1, 2):
 driver.quit()
 logging.info(f"LG 모니터 필터 후 {len(items)}개 남음")
 
-# ────────────────────────── 4. DataFrame 및 빈 결과 처리 ──────────────────────────
+# ────────────────────────── 4. DataFrame 생성 및 날짜 부여 ────────────────
 cols = ["asin", "title", "url", "price", "rank"]
-df_today = pd.DataFrame(items, columns=cols)
-
-if df_today.empty:
-    logging.info("LG 모니터 없음 → 시트 업데이트 생략")
+df = pd.DataFrame(items, columns=cols)
+if df.empty:
+    logging.info("LG 모니터 없음 → 업데이트 생략")
     sys.exit(0)
 
-df_today = df_today.sort_values("rank").reset_index(drop=True)
+df = df.sort_values("rank").reset_index(drop=True)
 kst = pytz.timezone("Asia/Seoul")
-df_today["date"] = datetime.datetime.now(kst).strftime("%Y-%m-%d %H:%M:%S")
+df["date"] = datetime.datetime.now(kst).strftime("%Y-%m-%d %H:%M:%S")
 
-# ────────────────────────── 5. Google Sheet 기록 ──────────────────────────
+# ────────────────────────── 5. Google Sheet 기록 및 변동 계산 ──────────────
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 creds = Credentials.from_service_account_info(
     json.loads(base64.b64decode(os.environ["GCP_SA_BASE64"]).decode()),
-    scopes=SCOPES,
+    scopes=SCOPES
 )
 gc = gspread.authorize(creds)
-SHEET_ID = os.environ["SHEET_ID"]
-sh = gc.open_by_key(SHEET_ID)
+sh = gc.open_by_key(os.environ["SHEET_ID"])
 
-ws_hist = (
-    sh.worksheet("History")
-    if "History" in [w.title for w in sh.worksheets()]
-    else sh.add_worksheet("History", rows=2000, cols=20)
-)
-ws_today = (
-    sh.worksheet("Today")
-    if "Today" in [w.title for w in sh.worksheets()]
-    else sh.add_worksheet("Today", rows=100, cols=20)
-)
+ws_hist = sh.worksheet("History") if "History" in [w.title for w in sh.worksheets()] else sh.add_worksheet("History", 2000, 20)
+ws_today = sh.worksheet("Today")   if "Today"   in [w.title for w in sh.worksheets()] else sh.add_worksheet("Today",   100, 20)
 
 try:
     prev = pd.DataFrame(ws_hist.get_all_records()).dropna()
-except gspread.exceptions.APIError:
+except:
     prev = pd.DataFrame()
 
-if not prev.empty and {"asin", "rank", "price", "date"} <= set(prev.columns):
-    latest = (
-        prev.sort_values("date")
-        .groupby("asin", as_index=False)
-        .last()[["asin", "rank", "price"]]
-        .rename(columns={"rank": "rank_prev", "price": "price_prev"})
-    )
-    df_today = df_today.merge(latest, on="asin", how="left")
+if not prev.empty and {"asin","rank","price","date"} <= set(prev.columns):
+    last = prev.sort_values("date").groupby("asin", as_index=False).last()[["asin","rank","price"]]
+    last.columns = ["asin","rank_prev","price_prev"]
+    df = df.merge(last, on="asin", how="left")
 else:
-    df_today["rank_prev"] = None
-    df_today["price_prev"] = None
+    df["rank_prev"] = None
+    df["price_prev"] = None
 
-# rank_prev만 numeric, price는 raw 문자열이므로 변환 제외
-df_today["rank_prev"] = pd.to_numeric(df_today["rank_prev"], errors="coerce")
+df["rank_delta"]  = df["rank_prev"].combine(df["rank"], lambda prev,curr: "-" if pd.isna(prev) else f"{'▲' if prev>curr else '▼'}{abs(int(prev-curr))}")
+df["price_delta"] = "-"  # raw 문자열만
 
-df_today["rank_delta_num"] = df_today["rank_prev"] - df_today["rank"]
-df_today["rank_delta"] = df_today["rank_delta_num"].apply(
-    lambda x: "-" if pd.isna(x) or x == 0 else ("▲"+str(int(abs(x))) if x > 0 else "▼"+str(int(abs(x))))
-)
-# price_delta는 raw price만 보여줄 경우 모두 "-"
-df_today["price_delta"] = "-"
+out_cols = ["asin","title","rank","price","url","date","rank_delta","price_delta"]
+df_out   = df[out_cols].fillna("")
 
-cols_out = ["asin", "title", "rank", "price", "url", "date", "rank_delta", "price_delta"]
-df_today = df_today[cols_out].fillna("")
-
-# ────────────────────────── 6. 시트 쓰기 ──────────────────────────
 if not ws_hist.get_all_values():
-    ws_hist.append_row(cols_out, value_input_option="USER_ENTERED")
-ws_hist.append_rows(df_today.values.tolist(), value_input_option="USER_ENTERED")
-
+    ws_hist.append_row(out_cols, value_input_option="USER_ENTERED")
+ws_hist.append_rows(df_out.values.tolist(), value_input_option="USER_ENTERED")
 ws_today.clear()
-ws_today.update([cols_out] + df_today.values.tolist(), value_input_option="USER_ENTERED")
+ws_today.update([out_cols] + df_out.values.tolist(), value_input_option="USER_ENTERED")
 
-# ────────────────────────── 7. ▲/▼ 서식 ──────────────────────────
-RED = Color(1, 0, 0)
-BLUE = Color(0, 0, 1)
-delta_cols = {"rank_delta": "G", "price_delta": "H"}
+# ────────────────────────── 6. ▲/▼ 서식 적용 ──────────────────────────
+RED, BLUE = Color(1,0,0), Color(0,0,1)
 fmt_ranges = []
-for i, row in df_today.iterrows():
+for i, row in df_out.iterrows():
     r = i + 2
-    for col_name, col_letter in delta_cols.items():
-        val = row[col_name]
-        if isinstance(val, str) and val.startswith("▲"):
-            fmt_ranges.append(
-                (f"{col_letter}{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=RED)))
-            )
-        elif isinstance(val, str) and val.startswith("▼"):
-            fmt_ranges.append(
-                (f"{col_letter}{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=BLUE)))
-            )
+    for col, letter in [("rank_delta","G"),("price_delta","H")]:
+        v = row[col]
+        if isinstance(v,str) and v.startswith("▲"):
+            fmt_ranges.append((f"{letter}{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=RED))))
+        elif isinstance(v,str) and v.startswith("▼"):
+            fmt_ranges.append((f"{letter}{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=BLUE))))
 if fmt_ranges:
     format_cell_ranges(ws_today, fmt_ranges)
 
-logging.info("Google Sheet 업데이트 완료 — LG 모니터 %d개", len(df_today))
-print("✓ Google Sheet 업데이트 완료 — LG 모니터", len(df_today))
+logging.info("Google Sheet 업데이트 완료 — LG 모니터 %d개", len(df_out))
+print("✓ Google Sheet 업데이트 완료 — LG 모니터", len(df_out))
