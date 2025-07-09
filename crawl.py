@@ -19,7 +19,7 @@ logging.basicConfig(
 )
 logging.info("🔍 LG 모니터 크롤러 시작")
 
-# ────────────────────────── 1. Selenium 준비 ──────────────────────────
+# ────────────────────────── 1. Selenium 드라이버 준비 ──────────────────────────
 def get_driver():
     service = None
     opt = webdriver.ChromeOptions()
@@ -35,51 +35,66 @@ def get_driver():
     )
     return webdriver.Chrome(service=service, options=opt)
 
-BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031/"
-CARD_SEL = "li.zg-no-numbers"
-
-# ────────────────────────── 2. 카드 크롤링 & 파싱 ─────────────────────────
+# ────────────────────────── 2. 카드 크롤링 & 파싱 ──────────────────────────
 def fetch_cards_and_parse(page: int, driver):
     parsed_items = []
     url = BASE_URL if page == 1 else f"{BASE_URL}?pg={page}"
-    logging.info(f"▶️  페이지 {page} 크롤링 시작 - URL: {url}")
+    logging.info(f"▶️  페이지 {page} 크롤링 시작 – URL: {url}")
     driver.get(url)
 
-    # ─── 스크롤하면서 추가 카드 로딩 (최대 대기 60초) ───
+    # 페이지 초기 로딩 대기
+    try:
+        WebDriverWait(driver, 20).until(
+            EC.presence_of_element_located((
+                By.XPATH,
+                "//div[starts-with(@id,'CardInstance')]/div[2]//ol/li[contains(@class,'zg-no-numbers')]"
+            ))
+        )
+    except TimeoutException:
+        logging.warning(f"    페이지 {page} 초반 로딩 타임아웃, 계속 진행합니다")
+
+    # 스크롤하면서 추가 로딩 (최대 MAX_WAIT 초)
     SCROLL_PAUSE = 10
     MAX_WAIT = 60
     start = time.time()
     last_count = 0
     iteration = 0
+
     while True:
         iteration += 1
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
         time.sleep(SCROLL_PAUSE)
-        cards = driver.find_elements(By.CSS_SELECTOR, CARD_SEL)
+
+        cards = driver.find_elements(
+            By.XPATH,
+            "//div[starts-with(@id,'CardInstance')]/div[2]//ol/li[contains(@class,'zg-no-numbers')]"
+        )
         now = len(cards)
         elapsed = int(time.time() - start)
-        logging.info(f"   [스크롤 {iteration}] 로딩된 카드: {now}개, 경과 시간: {elapsed}초")
-        if page == 1 and now < 50 and elapsed < MAX_WAIT:
-            continue
+        logging.info(f"   [스크롤 {iteration}] 로딩된 카드: {now}개, 경과: {elapsed}초")
+
         if now == last_count or elapsed >= MAX_WAIT:
             break
         last_count = now
-    logging.info(f"✅ 페이지 {page} 카드 수집 완료: {last_count or now}개 (총 경과 {elapsed}초)")
 
+    total = last_count or now
+    logging.info(f"✅ 페이지 {page} 카드 수집 완료: {total}개 (총 경과 {elapsed}초)")
+
+    # 카드 파싱
     for idx, card in enumerate(cards, start=1):
         logging.info(f"  ▶ 카드 [{idx}] 파싱 시작")
-        # 랭크 추출
+        # 랭크
         try:
             rank_text = card.find_element(
                 By.XPATH, './/span[contains(@class,"zg-bdg-text")]'
             ).text.strip()
             rank = int(re.sub(r"\D", "", rank_text))
-            logging.info(f"    랭크: {rank_text} -> {rank}")
+            logging.info(f"    랭크: {rank_text} → {rank}")
         except (NoSuchElementException, ValueError, StaleElementReferenceException) as e:
             logging.warning(f"    [{idx}] 랭크 추출 실패: {e}")
             continue
 
-        # 제목 추출
+        # 제목
         try:
             title = card.find_element(
                 By.XPATH, './/div[contains(@class,"_cDEzb_p13n-sc-css-line-clamp-2_EWgCb")]'
@@ -91,7 +106,7 @@ def fetch_cards_and_parse(page: int, driver):
         # LG 필터
         title_norm = title.replace("\u00a0", " ").replace("\u202f", " ")
         if not re.search(r"\bLG\b", title_norm, re.I):
-            logging.info(f"    LG 모니터 아님 - 스킵: {title}")
+            logging.info(f"    LG 모니터 아님 – 스킵: {title}")
             continue
 
         # 가격 (문자열 그대로)
@@ -116,13 +131,13 @@ def fetch_cards_and_parse(page: int, driver):
             continue
 
         parsed_items.append({
-            "asin": asin,
+            "asin":  asin,
             "title": title,
-            "url": link,
+            "url":   link,
             "price": price,
-            "rank": rank,
+            "rank":  rank,
         })
-        logging.info(f"  ✔ 카드 [{idx}] 성공적으로 파싱 및 추가: {{'asin': asin, 'rank': rank, 'price': price}}")
+        logging.info(f"  ✔ 카드 [{idx}] 파싱 성공 – ASIN: {asin}, 랭크: {rank}, 가격: {price}")
 
     return parsed_items
 
