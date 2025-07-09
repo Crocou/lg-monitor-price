@@ -10,12 +10,11 @@ import requests, pandas as pd, gspread, pytz
 from google.oauth2.service_account import Credentials
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.common.exceptions import NoSuchElementException
+from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException
 from gspread_formatting import format_cell_ranges, CellFormat, TextFormat, Color
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
-
 
 # ─── 0. 로깅 설정 ──────────────────────────────────────────────────
 logging.basicConfig(
@@ -70,37 +69,22 @@ def set_zip(driver, zip_code="65760"):
     driver.refresh()
     time.sleep(1)
 
-BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031/"  # pg=1|2
-CARD_SEL = (
-    "li.zg-no-numbers"
-)
-
-# ────────────────────────── 2. 페이지에서 카드 가져오기 ──────────────────────────
 BASE_URL = "https://www.amazon.de/gp/bestsellers/computers/429868031/"
 CARD_SEL = "li.zg-no-numbers"
-
 
 def money_to_float(txt: str):
     """'€196,79' 또는 '€196.79' → 196.79 (float)"""
     if not txt:
         return None
-    # NBSP·좁은공백 제거
     txt = txt.replace("\u00a0", "").replace("\u202f", "")
-    # 통화·문자 제거
     txt_clean = re.sub(r"[^\d,\.]", "", txt)
-
-    # 소수 구분자 감지
     if "," in txt_clean and "." in txt_clean:
-        # 마지막 구분자를 소수점으로 간주
         if txt_clean.rfind(",") > txt_clean.rfind("."):
             txt_clean = txt_clean.replace(".", "").replace(",", ".")
         else:
             txt_clean = txt_clean.replace(",", "")
     elif "," in txt_clean and "." not in txt_clean:
         txt_clean = txt_clean.replace(",", ".")
-    else:
-        txt_clean = txt_clean  # 이미 '.'만 있거나 구분자 없음
-
     try:
         return float(txt_clean)
     except ValueError:
@@ -113,75 +97,58 @@ def fetch_cards_and_parse(page: int, driver):
     logging.info(f"▶️  요청 URL (page {page}): {url}")
     driver.get(url)
 
-    # ─── 배송지·통화 쿠키 세팅 후 새로고침 ───
     driver.add_cookie({"name": "lc-main", "value": "de_DE"})
     driver.add_cookie({"name": "i18n-prefs", "value": "EUR"})
     driver.refresh()
 
-    # ─── ★ 최소 한 장이라도 뜰 때까지 대기 (최대 20초) ───
     try:
         WebDriverWait(driver, 20).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, CARD_SEL))
         )
     except TimeoutException:
         logging.error(f"⛔ page {page}: 카드가 한 장도 안 뜸 — 타임아웃")
-        return []                # 바로 빈 리스트 반환해 다음 페이지 시도
+        return []
 
-    # ─── 스크롤하면서 추가 카드 로딩 ───
     SCROLL_PAUSE = 10
-    MAX_WAIT = 60                # 스크롤 최대 대기(초) — 필요에 맞게 조정
+    MAX_WAIT = 60
     start = time.time()
     last = 0
     while True:
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
         time.sleep(SCROLL_PAUSE)
-
         cards = driver.find_elements(By.CSS_SELECTOR, CARD_SEL)
         now = len(cards)
-
-        # page 1이라면 50개 꽉 찰 때까지 시도 (필요 없으면 조건 삭제)
         if page == 1 and now < 50 and time.time() - start < MAX_WAIT:
             continue
-
         if now == last or time.time() - start >= MAX_WAIT:
             break
         last = now
 
     logging.info(f"✅ page {page} 카드 수집 완료: {len(cards)}개")
-
-
     for idx, card in enumerate(cards, start=1):
-        # ───── 랭크 ─────
         try:
             rank_el = card.find_element(By.XPATH, './/span[contains(@class,"zg-bdg-text")]')
-            rank_text = rank_el.text.strip()
-            rank = int(re.sub(r"\D", "", rank_text))  # "#1" → "1"
-        except (NoSuchElementException, ValueError, StaleElementReferenceException):
+            rank = int(re.sub(r"\D", "", rank_el.text.strip()))
+        except Exception:
             logging.warning(f"[{idx}] 랭크 추출 실패 → 건너뜀")
             continue
 
-        # ───── 제목 ─────
         try:
+            title = card.find_element(By.XPATH, './/div[contains(@class,"_cDEzb_p13n-sc-css-line-clamp-2_EWgCb")]').text.strip()
+        except NoSuchElementException:
             try:
-                title = card.find_element(By.XPATH, './/div[contains(@class,"_cDEzb_p13n-sc-css-line-clamp-2_EWgCb")]').text.strip()
-            except NoSuchElementException:
                 title = card.find_element(By.XPATH, './/img[@alt]').get_attribute("alt").strip()
-        except Exception:
-            title = ""
-
-        # NBSP 대체 후 LG 여부 체크
+            except Exception:
+                title = ""
         title_norm = title.replace("\u00a0", " ").replace("\u202f", " ")
         lg_match = bool(re.search(r"\bLG\b", title_norm, re.I))
 
-        # ───── 가격 ─────
         try:
             price_raw = card.find_element(By.CSS_SELECTOR, 'span._cDEzb_p13n-sc-price_3mJ9Z').text.strip()
         except NoSuchElementException:
             price_raw = ""
+        price_val = price_raw  # float 변환 없이 raw 문자열 그대로
 
-        price_val = money_to_float(price_raw)
-
-        # ───── 링크/ASIN ─────
         try:
             a = card.find_element(By.XPATH, './/a[contains(@href,"/dp/")]')
             href = a.get_attribute("href")
@@ -191,7 +158,6 @@ def fetch_cards_and_parse(page: int, driver):
             logging.warning(f"[{idx}] 링크/ASIN 추출 실패 → 건너뜀")
             continue
 
-        # ───── 로깅 및 결과 ─────
         card_info = {
             "rank": rank,
             "title": title,
@@ -239,7 +205,7 @@ df_today = df_today.sort_values("rank").reset_index(drop=True)
 kst = pytz.timezone("Asia/Seoul")
 df_today["date"] = datetime.datetime.now(kst).strftime("%Y-%m-%d %H:%M:%S")
 
-# ────────────────────────── 5. Google Sheet 기록 (이하 동일) ─────────────────────
+# ────────────────────────── 5. Google Sheet 기록 ─────────────────────
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 creds = Credentials.from_service_account_info(
     json.loads(base64.b64decode(os.environ["GCP_SA_BASE64"]).decode()),
@@ -277,20 +243,15 @@ else:
     df_today["rank_prev"] = None
     df_today["price_prev"] = None
 
-for col in ["price", "price_prev", "rank_prev"]:
+# price는 raw 문자열이므로 변환 대상에서 제외
+for col in ["rank_prev", "price_prev"]:
     df_today[col] = pd.to_numeric(df_today[col], errors="coerce")
 
 df_today["rank_delta_num"] = df_today["rank_prev"] - df_today["rank"]
-df_today["price_delta_num"] = df_today["price"] - df_today["price_prev"]
+df_today["rank_delta"] = df_today["rank_delta_num"].apply(lambda x: "-" if pd.isna(x) or x == 0 else ("▲"+str(int(abs(x))) if x>0 else "▼"+str(int(abs(x)))))
 
-def fmt(val, is_price=False):
-    if pd.isna(val) or val == 0:
-        return "-"
-    arrow = "▲" if val > 0 else "▼"
-    return f"{arrow}{abs(val):.2f}" if is_price else f"{arrow}{abs(int(val))}"
-
-df_today["rank_delta"] = df_today["rank_delta_num"].apply(fmt)
-df_today["price_delta"] = df_today["price_delta_num"].apply(lambda x: fmt(x, True))
+# raw price만 보여줄 경우, 모든 price_delta를 "-"로 고정
+df_today["price_delta"] = "-"
 
 cols_out = [
     "asin",
@@ -304,7 +265,7 @@ cols_out = [
 ]
 df_today = df_today[cols_out].fillna("")
 
-# 6-B. 시트 쓰기
+# ────────────────────────── 6. 시트 쓰기 ──────────────────────────
 if not ws_hist.get_all_values():
     ws_hist.append_row(cols_out, value_input_option="USER_ENTERED")
 ws_hist.append_rows(df_today.values.tolist(), value_input_option="USER_ENTERED")
@@ -312,7 +273,7 @@ ws_hist.append_rows(df_today.values.tolist(), value_input_option="USER_ENTERED")
 ws_today.clear()
 ws_today.update([cols_out] + df_today.values.tolist(), value_input_option="USER_ENTERED")
 
-# 6-C. ▲/▼ 서식
+# ────────────────────────── 7. ▲/▼ 서식 ──────────────────────────
 RED = Color(1, 0, 0)
 BLUE = Color(0, 0, 1)
 delta_cols = {"rank_delta": "G", "price_delta": "H"}
