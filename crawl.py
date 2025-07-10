@@ -153,26 +153,39 @@ wait = WebDriverWait(driver, 20)
 # (A) 배송지 UI 통해 우편번호 설정
 logging.info("📍 배송지 설정 시작")
 driver.get("https://www.amazon.de/")
-# 충분한 로드 대기
-time.sleep(3)
+wait = WebDriverWait(driver, 20)
+
 try:
     nav_belt = wait.until(EC.presence_of_element_located((By.ID, "nav-belt")))
     loc_btn = nav_belt.find_element(By.ID, "nav-global-location-popover-link")
     driver.execute_script("arguments[0].click();", loc_btn)
     logging.info("📍 배송지 버튼 클릭 성공")
+except:
+    print("❌ 배송지 버튼 클릭 실패")
+
+try:
     zip_in = wait.until(EC.presence_of_element_located((By.ID, "GLUXZipUpdateInput")))
     zip_in.clear()
     zip_in.send_keys("65760")
     logging.info("📮 우편번호 입력 완료")
+except:
+    print("❌ 우편번호 입력 실패")
+
+try:
     wait.until(EC.element_to_be_clickable((By.ID, "GLUXZipUpdate"))).click()
     logging.info("📦 우편번호 적용 클릭 완료")
     time.sleep(2)
+except:
+    print("❌ 적용 버튼 클릭 실패")
+    
     driver.refresh()
     time.sleep(3)
-    current_loc = wait.until(EC.presence_of_element_located((By.ID, "glow-ingress-line2"))).text
-    logging.info(f"✅ 현재 배송지: {current_loc}")
-except Exception as e:
-    logging.warning(f"❌ 배송지 설정 오류: {e}")
+
+try:
+    ship_to = wait.until(EC.presence_of_element_located((By.ID, "glow-ingress-line2"))).text
+    print("✅ 현재 배송지:", ship_to)
+except:
+    print("❌ 배송지 확인 실패")
 
 # (B) 베스트셀러 페이지 크롤링
 logging.info("🔍 크롤링 시작")
