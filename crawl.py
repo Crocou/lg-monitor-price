@@ -166,8 +166,8 @@ try:
     # 1) 상위 컨테이너(#nav-belt) 대기 후 획득
     nav_belt = wait.until(EC.presence_of_element_located((By.ID, "nav-belt")))
     location_slot = nav_belt.find_element(By.ID, "nav-global-location-slot")
-    modal_trigger = location_slot.find_element(By.ID, "nav-global-location-data-modal-action")
-    driver.execute_script("arguments[0].click();", modal_trigger)
+    popover_link = location_slot.find_element(By.ID, "nav-global-location-popover-link")
+    driver.execute_script("arguments[0].click();", popover_link)
     logging.info("📍 배송지 버튼 클릭 성공")
 except:
     print("❌ 배송지 버튼 클릭 실패")
