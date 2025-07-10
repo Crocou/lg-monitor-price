@@ -34,9 +34,16 @@ wait = WebDriverWait(driver, 20)
 
 # 1) 배송지 클릭 (위쪽 네비게이션바)
 try:
-    button = driver.find_element(By.CSS_SELECTOR, 'a.a-popover-trigger.nav-a')
-    button.click()
-    print("📍 배송지 버튼 클릭 완료")
+    # 상위 컨테이너 먼저 찾기
+    nav_belt = wait.until(EC.presence_of_element_located((By.ID, "nav-belt")))
+
+    # nav_belt 안에서 배송지 버튼 찾기
+    location_btn = nav_belt.find_element(By.ID, "nav-global-location-popover-link")
+
+    # JS로 클릭 시도 (Amazon에서 .click()이 종종 무시되므로)
+    driver.execute_script("arguments[0].click();", location_btn)
+
+    print("📍 배송지 버튼 클릭 성공")
 except:
     print("❌ 배송지 버튼 클릭 실패")
 
