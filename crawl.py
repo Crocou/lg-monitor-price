@@ -8,6 +8,11 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from gspread_formatting import format_cell_ranges, CellFormat, TextFormat, Color
 
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+import time
 
 def get_driver():
     opts = webdriver.ChromeOptions()
@@ -22,6 +27,10 @@ def get_driver():
         "Chrome/126.0 Safari/537.36"
     )
     return webdriver.Chrome(options=opts)
+
+driver = get_driver()
+driver.get("https://www.amazon.de/")
+wait = WebDriverWait(driver, 20)
 
 # 1) 배송지 클릭 (위쪽 네비게이션바)
 try:
