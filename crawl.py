@@ -34,7 +34,7 @@ wait = WebDriverWait(driver, 20)
 
 # 1) 배송지 클릭 (위쪽 네비게이션바)
 try:
-    button = driver.find_element(By.ID, "nav-global-location-popover-link")
+    button = driver.find_element(By.CSS_SELECTOR, 'a.a-popover-trigger.nav-a')
     button.click()
     print("📍 배송지 버튼 클릭 완료")
 except:
