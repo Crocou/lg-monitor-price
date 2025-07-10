@@ -34,7 +34,8 @@ wait = WebDriverWait(driver, 20)
 
 # 1) 배송지 클릭 (위쪽 네비게이션바)
 try:
-    wait.until(EC.element_to_be_clickable((By.ID, "nav-global-location-popover-link"))).click()
+    location_btn = wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="nav-global-location-popover-link"]')))
+    location_btn.click()
     print("📍 배송지 버튼 클릭 완료")
 except:
     print("❌ 배송지 버튼 클릭 실패")
