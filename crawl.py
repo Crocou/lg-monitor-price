@@ -156,21 +156,19 @@ driver.get("https://www.amazon.de/")
 wait = WebDriverWait(driver, 20)
 
 try:
-    #nav_belt = wait.until(EC.presence_of_element_located((By.ID, "nav-belt")))
-    #loc_btn = nav_belt.find_element(By.ID, "nav-global-location-popover-link")
-    
-    #modal_trigger = nav_belt.find_element(By.ID, "nav-global-location-data-modal-action")
-    #driver.execute_script("arguments[0].click();", modal_trigger)
-    #driver.execute_script("arguments[0].click();", loc_btn)
-
-    # 1) 상위 컨테이너(#nav-belt) 대기 후 획득
     deliver_to_btn = wait.until(EC.presence_of_element_located(
-        (By.XPATH, '//a[contains(@id, "nav-global-location") and contains(., "Deliver to")]')
+        (By.XPATH, '//a[contains(@id, "nav-global-location")]')
     ))
     driver.execute_script("arguments[0].click();", deliver_to_btn)
     logging.info("📍 배송지 버튼 클릭 성공")
-except:
-    print("❌ 배송지 버튼 클릭 실패")
+except TimeoutException:
+    logging.error("❌ 배송지 버튼을 찾지 못해 작업을 종료합니다.")
+    driver.quit()
+    sys.exit(1)
+except Exception as e:
+    logging.error(f"❌ 배송지 버튼 클릭 중 예외 발생: {e}")
+    driver.quit()
+    sys.exit(1)
 
 try:
     zip_in = wait.until(EC.presence_of_element_located((By.ID, "GLUXZipUpdateInput")))
