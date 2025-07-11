@@ -153,6 +153,10 @@ wait = WebDriverWait(driver, 20)
 # (A) 배송지 UI 통해 우편번호 설정
 logging.info("📍 배송지 설정 시작")
 driver.get("https://www.amazon.de/")
+time.sleep(2)
+driver.add_cookie({"name": "lc-main",    "value": "de_DE"})
+driver.add_cookie({"name": "i18n-prefs", "value": "EUR"})
+driver.refresh()
 wait = WebDriverWait(driver, 20)
 
 try:
