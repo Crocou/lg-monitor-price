@@ -12,7 +12,11 @@ import pandas as pd, gspread, pytz
 from google.oauth2.service_account import Credentials
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException, TimeoutException
+from selenium.common.exceptions import (
+    NoSuchElementException,
+    StaleElementReferenceException,
+    TimeoutException,
+)
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from gspread_formatting import format_cell_ranges, CellFormat, TextFormat, Color
@@ -54,11 +58,6 @@ def fetch_cards_and_parse(page: int, driver):
     logging.info(f"▶️ 요청 URL (page {page}): {url}")
     driver.get(url)
 
-    # 통화·언어 쿠키 세팅
-    driver.add_cookie({"name": "lc-main",    "value": "de_DE"})
-    driver.add_cookie({"name": "i18n-prefs", "value": "EUR"})
-    driver.refresh()
-
     # 최소 하나라도 로드될 때까지 대기
     try:
         WebDriverWait(driver, 20).until(
@@ -75,7 +74,9 @@ def fetch_cards_and_parse(page: int, driver):
         time.sleep(5)
         cards = driver.find_elements(By.XPATH, CARDS_XPATH)
         curr = len(cards)
-        if (page == 1 and curr < 50 and time.time() - start < 60) or (curr != last_count and time.time() - start < 60):
+        if (page == 1 and curr < 50 and time.time() - start < 60) or (
+            curr != last_count and time.time() - start < 60
+        ):
             last_count = curr
             continue
         break
@@ -116,7 +117,8 @@ def fetch_cards_and_parse(page: int, driver):
             ]
             for method, sel in selectors:
                 try:
-                    txt = (card.find_element(By.XPATH, sel).text if method=='xpath'
+                    txt = (card.find_element(By.XPATH, sel).text
+                           if method=='xpath'
                            else card.find_element(By.CSS_SELECTOR, sel).text).strip()
                     if '€' in txt:
                         price_raw = txt
@@ -138,11 +140,24 @@ def fetch_cards_and_parse(page: int, driver):
             logging.warning(f"[{idx}] 링크/ASIN 추출 실패 → 건너뜀")
             continue
 
-        info = {"rank": rank, "title": title, "price_text": price_raw, "asin": asin, "url": href, "lg_match": lg_match}
+        info = {
+            "rank": rank,
+            "title": title,
+            "price_text": price_raw,
+            "asin": asin,
+            "url": href,
+            "lg_match": lg_match
+        }
         logging.info(f"CARD_DATA {json.dumps(info, ensure_ascii=False)}")
 
         if lg_match:
-            parsed_items.append({"asin": asin, "title": title, "url": href, "price": price_raw, "rank": rank})
+            parsed_items.append({
+                "asin": asin,
+                "title": title,
+                "url": href,
+                "price": price_raw,
+                "rank": rank
+            })
 
     return parsed_items
 
@@ -152,51 +167,61 @@ wait = WebDriverWait(driver, 20)
 
 # (A) 배송지 UI 통해 우편번호 설정
 logging.info("📍 배송지 설정 시작")
-driver.get("https://www.amazon.de/")
+
+# 1) BASE_URL로 진입 후 쿠키 설정
+driver.get(BASE_URL)
 time.sleep(2)
 driver.add_cookie({"name": "lc-main",    "value": "de_DE"})
 driver.add_cookie({"name": "i18n-prefs", "value": "EUR"})
 driver.refresh()
-wait = WebDriverWait(driver, 20)
+time.sleep(2)
 
-try:
-    deliver_to_btn = wait.until(EC.presence_of_element_located(
-        (By.XPATH, '//a[contains(@id, "nav-global-location")]')
-    ))
-    driver.execute_script("arguments[0].click();", deliver_to_btn)
-    logging.info("📍 배송지 버튼 클릭 성공")
-except TimeoutException:
-    logging.error("❌ 배송지 버튼을 찾지 못해 작업을 종료합니다.")
+# 2) 배송지 버튼 찾기 + 클릭 (반복 시도)
+MAX_ATTEMPTS = 5
+RETRY_DELAY  = 2  # 초
+
+for attempt in range(1, MAX_ATTEMPTS + 1):
+    try:
+        logging.info(f"🔍 배송지 버튼 찾기 시도 {attempt}/{MAX_ATTEMPTS}")
+        deliver_to_btn = wait.until(EC.presence_of_element_located(
+            (By.XPATH, '//a[contains(@id, "nav-global-location")]')
+        ))
+        driver.execute_script("arguments[0].click();", deliver_to_btn)
+        logging.info("📍 배송지 버튼 클릭 성공")
+        break
+    except TimeoutException:
+        logging.warning(f"⚠️ 배송지 버튼을 찾지 못함 (시도 {attempt})")
+        time.sleep(RETRY_DELAY)
+else:
+    logging.error(f"❌ 배송지 버튼을 {MAX_ATTEMPTS}회 시도했으나 찾지 못해 종료합니다.")
     driver.quit()
     sys.exit(1)
-except Exception as e:
-    logging.error(f"❌ 배송지 버튼 클릭 중 예외 발생: {e}")
-    driver.quit()
-    sys.exit(1)
 
+# 3) 우편번호 입력 및 적용
 try:
     zip_in = wait.until(EC.presence_of_element_located((By.ID, "GLUXZipUpdateInput")))
     zip_in.clear()
     zip_in.send_keys("65760")
     logging.info("📮 우편번호 입력 완료")
-except:
-    print("❌ 우편번호 입력 실패")
 
-try:
     wait.until(EC.element_to_be_clickable((By.ID, "GLUXZipUpdate"))).click()
     logging.info("📦 우편번호 적용 클릭 완료")
-    time.sleep(2)
-except:
-    print("❌ 적용 버튼 클릭 실패")
-    
-    driver.refresh()
     time.sleep(3)
+    driver.refresh()
+    time.sleep(2)
+except Exception as e:
+    logging.error(f"❌ 우편번호 설정 실패: {e}")
+    driver.quit()
+    sys.exit(1)
 
+# 4) 배송지 확인
 try:
     ship_to = wait.until(EC.presence_of_element_located((By.ID, "glow-ingress-line2"))).text
-    print("✅ 현재 배송지:", ship_to)
-except:
-    print("❌ 배송지 확인 실패")
+    logging.info(f"✅ 현재 배송지: {ship_to}")
+except Exception:
+    logging.error("❌ 배송지 확인 실패")
+    driver.quit()
+    sys.exit(1)
 
 # (B) 베스트셀러 페이지 크롤링
 logging.info("🔍 크롤링 시작")
@@ -210,7 +235,7 @@ for pg in (1, 2):
 driver.quit()
 logging.info(f"LG 모니터 필터 후 {len(items)}개 남음")
 
-# ────────────────────────── 4. DataFrame 생성 및 Google Sheet 기록 ──────────────────────────
+# ────────────────────────── 5. DataFrame 생성 및 Google Sheet 기록 ──────────────────────────
 cols = ["asin","title","rank","price","url","date","rank_delta","price_delta"]
 df = pd.DataFrame(items)
 if df.empty:
@@ -229,8 +254,16 @@ creds = Credentials.from_service_account_info(
 gc = gspread.authorize(creds)
 sh = gc.open_by_key(os.environ["SHEET_ID"])
 
-ws_hist = sh.worksheet("History") if "History" in [w.title for w in sh.worksheets()] else sh.add_worksheet("History", 2000, 20)
-ws_today = sh.worksheet("Today")   if "Today"   in [w.title for w in sh.worksheets()] else sh.add_worksheet("Today",   100, 20)
+ws_hist = (
+    sh.worksheet("History")
+    if "History" in [w.title for w in sh.worksheets()]
+    else sh.add_worksheet("History", 2000, 20)
+)
+ws_today = (
+    sh.worksheet("Today")
+    if "Today" in [w.title for w in sh.worksheets()]
+    else sh.add_worksheet("Today", 100, 20)
+)
 
 try:
     prev = pd.DataFrame(ws_hist.get_all_records()).dropna()
@@ -244,8 +277,6 @@ if not prev.empty and {"asin","rank","price","date"} <= set(prev.columns):
 else:
     df["rank_prev"] = None
     df["price_prev"] = None
-
-import pandas as pd
 
 df["rank_delta"]  = df["rank_prev"].combine(df["rank"], lambda prev,curr: "-" if pd.isna(prev) else f"{'▲' if prev>curr else '▼'}{abs(int(prev-curr))}")
 df["price_delta"] = "-"
