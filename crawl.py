@@ -174,11 +174,11 @@ time.sleep(2)
 driver.add_cookie({"name": "lc-main",    "value": "de_DE"})
 driver.add_cookie({"name": "i18n-prefs", "value": "EUR"})
 driver.refresh()
-time.sleep(2)
+time.sleep(5)
 
 # 2) 배송지 버튼 찾기 + 클릭 (반복 시도)
 MAX_ATTEMPTS = 5
-RETRY_DELAY  = 2  # 초
+RETRY_DELAY  = 5  # 초
 
 for attempt in range(1, MAX_ATTEMPTS + 1):
     try:
@@ -190,7 +190,8 @@ for attempt in range(1, MAX_ATTEMPTS + 1):
         logging.info("📍 배송지 버튼 클릭 성공")
         break
     except TimeoutException:
-        logging.warning(f"⚠️ 배송지 버튼을 찾지 못함 (시도 {attempt})")
+        logging.warning(f"⚠️ 배송지 버튼을 찾지 못함 (시도 {attempt}) – 페이지 새로고침 후 재시도")
+        driver.refresh()
         time.sleep(RETRY_DELAY)
 else:
     logging.error(f"❌ 배송지 버튼을 {MAX_ATTEMPTS}회 시도했으나 찾지 못해 종료합니다.")
