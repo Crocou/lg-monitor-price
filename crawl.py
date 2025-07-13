@@ -279,7 +279,7 @@ else:
     df["rank_prev"] = None
     df["price_prev"] = None
 
-df["rank_delta"]  = df["rank_prev"].combine(df["rank"], lambda prev,curr: "-" if pd.isna(prev) else f"{'▲' if prev>curr else '▼'}{abs(int(prev-curr))}")
+df["rank_delta"] = df["rank_prev"].combine(df["rank"], lambda prev, curr: "-" if pd.isna(prev) or int(prev) == int(curr) else f"{'▲' if prev > curr else '▼'}{abs(int(prev - curr))}")
 df["price_delta"] = "-"
 
 out_cols = ["asin","title","rank","price","url","date","rank_delta","price_delta"]
