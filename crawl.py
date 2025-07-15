@@ -277,13 +277,13 @@ def calc_price_delta(row):
     cur, prev = row["price_curr_val"], row["price_prev_val"]
     if pd.isna(prev) or pd.isna(cur) or cur == prev:
         return "-"
-    sign = "▲" if cur > prev else "▼"
+    sign = "▴" if cur > prev else "▾"
     return f"{sign}{abs(cur - prev):.2f}"
 
 df["rank_delta"] = df["rank_prev"].combine(
     df["rank"],
     lambda prev, curr: "-" if pd.isna(prev) or int(prev) == int(curr)
-                       else f"{'▲' if prev > curr else '▼'}{abs(int(prev - curr))}"
+                       else f"{'▴' if prev > curr else '▾'}{abs(int(prev - curr))}"
 )
 df["price_delta"] = df.apply(calc_price_delta, axis=1)
 
@@ -302,9 +302,9 @@ for i, row in df_out.iterrows():
     r = i + 2
     for col, letter in [("rank_delta","G"),("price_delta","H")]:
         v = row[col]
-        if v.startswith("▲"):
+        if v.startswith("▴"):
             fmt_ranges.append((f"{letter}{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=RED))))
-        elif v.startswith("▼"):
+        elif v.startswith("▾"):
             fmt_ranges.append((f"{letter}{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=BLUE))))
 if fmt_ranges:
     format_cell_ranges(ws_today, fmt_ranges)
