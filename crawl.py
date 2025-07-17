@@ -296,16 +296,16 @@ ws_hist.append_rows(df_out.values.tolist(), value_input_option="USER_ENTERED")
 ws_today.clear()
 ws_today.update([out_cols] + df_out.values.tolist(), value_input_option="USER_ENTERED")
 
-RED, BLUE = Color(1,0,0), Color(0,0,1)
+RED, GREEN = Color(1,0,0), Color(0,1,0)
 fmt_ranges = []
 for i, row in df_out.iterrows():
     r = i + 2
     for col, letter in [("rank_delta","G"),("price_delta","H")]:
         v = row[col]
         if v.startswith("▴"):
-            fmt_ranges.append((f"{letter}{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=RED))))
+            fmt_ranges.append((f"{letter}{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=GREEN))))
         elif v.startswith("▾"):
-            fmt_ranges.append((f"{letter}{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=BLUE))))
+            fmt_ranges.append((f"{letter}{r}", CellFormat(textFormat=TextFormat(bold=True, foregroundColor=RED))))
 if fmt_ranges:
     format_cell_ranges(ws_today, fmt_ranges)
 
